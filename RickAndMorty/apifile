@@ -1,67 +1,88 @@
 //
-//  ContentView.swift
-//  Clean API test
+//  EmbeddingFetcher.swift
+//
+//  One-shot fetch: UPC ➜ compact JSON {status, errors, embeddings[]}
 //
 
+import Foundation
 import SwiftUI
-import zlib                             // ← for the gzip helper below
+import zlib                         // for gunzip helper
 
-struct ContentView: View {
-    @State private var console = "Fetching…"
-
-    var body: some View {
-        ScrollView {
-            Text(console)
-                .font(.system(.body, design: .monospaced))
-                .padding()
+// MARK: – Public entry point (use anywhere)
+func fetchEmbeddingsJSON(for upc: String,
+                         completion: @escaping (Result<String, Error>) -> Void) {
+    Task {
+        do {
+            let json = try await EmbeddingFetcher().run(upc: upc)
+            completion(.success(json))
+        } catch {
+            completion(.failure(error))
         }
-        .onAppear { fetch(upc: "7062240121") }      // pick any UPC here
-    }
-
-    // MARK: – Networking
-    private func fetch(upc: String) {
-        // ── 1. build URL https://…/embeddings/upc?upc_id=XXXX
-        var url = URL(string:
-            "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/embeddings/upc"
-        )!
-        url.append(queryItems: [.init(name: "upc_id", value: upc)])
-
-        // ── 2. build request
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.setValue("c061c52a-b978-4ae9-9875-6584e58e8a74",        // ← your consumer-id
-                     forHTTPHeaderField: "wm_consumer.id")
-        req.setValue("Bearer eyJraWQiOiJkOTY5MzBhYy04YjhlLT...",     // ← paste a fresh JWT
-                     forHTTPHeaderField: "Authorization")
-
-        // ── 3. URLSession that accepts the staging cert
-        let session = URLSession(configuration: .default,
-                                 delegate: InsecureTLSDelegate(),
-                                 delegateQueue: nil)
-
-        session.dataTask(with: req) { data, _, error in
-            if let error { log("❌ \(error.localizedDescription)"); return }
-            guard let data else { log("❌ No data"); return }
-
-            // outer wrapper JSON
-            if let pretty = prettyPrintedJSON(from: data) {
-                log("✅ Response (outer JSON)\n\(pretty)")
-            }
-
-            // inner payload
-            log(unpackPayload(from: data, upc: upc))
-        }.resume()
-    }
-
-    private func log(_ text: String) {
-        DispatchQueue.main.async { console = text; print(text) }
     }
 }
 
-// ───────────────────────────────────────────────────────────────
-// MARK: – TLS delegate (staging cert only)
+// MARK: – Private worker type
+fileprivate struct EmbeddingFetcher {
 
-final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
+    // ── static config ──────────────────────────────────────────
+    private static let consumerID = "c061c52a-b978-4ae9-9875-6584e58e8a74"
+    private static let bearerJWT  = """
+    eyJraWQiOiJkOTY5MzBhYy04YjhlLT...   // ← paste fresh JWT here
+    """
+
+    private static let baseURL = URL(string:
+        "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/embeddings/upc"
+    )!
+
+    // ── main async pipeline ───────────────────────────────────
+    func run(upc: String) async throws -> String {
+
+        // 1) build request
+        var url = Self.baseURL
+        url.append(queryItems: [.init(name: "upc_id", value: upc)])
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(Self.consumerID,                   forHTTPHeaderField: "wm_consumer.id")
+        req.setValue("Bearer \(Self.bearerJWT)",        forHTTPHeaderField: "Authorization")
+
+        // 2) call
+        let (data, resp) = try await URLSession(configuration: .default,
+                                                delegate: InsecureTLSDelegate(),
+                                                delegateQueue: nil)
+                                 .data(for: req)
+
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            throw URLError(.badServerResponse)
+        }
+
+        // 3) decode outer JSON
+        guard
+            let outer = try? JSONSerialization.jsonObject(with: data) as? [String:Any],
+            let status  = outer["status"],
+            let errors  = outer["errors"],
+            let payloadB64 = outer["payload"] as? String,
+            let gz  = Data(base64Encoded: payloadB64),
+            let raw = gz.fullGunzip(),
+            let inner = try? JSONSerialization.jsonObject(with: raw) as? [String:Any],
+            let vec  = inner[upc] as? [NSNumber]
+        else { throw NSError(domain: "decode", code: 0) }
+
+        // 4) build compact dict
+        let compact: [String:Any] = [
+            "status":   status,
+            "errors":   errors,
+            "embeddings": vec.map { $0.floatValue }
+        ]
+
+        // 5) pretty-print JSON for console
+        let pretty = try JSONSerialization.data(withJSONObject: compact, options: .prettyPrinted)
+        return String(data: pretty, encoding: .utf8)!
+    }
+}
+
+// MARK: – Minimal TLS delegate for staging cert
+fileprivate final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
     func urlSession(_ s: URLSession, didReceive c: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         if let trust = c.protectionSpace.serverTrust {
@@ -72,65 +93,27 @@ final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
     }
 }
 
-// ───────────────────────────────────────────────────────────────
-// MARK: – Helpers
-
-/// Pretty-print any JSON data
-private func prettyPrintedJSON(from data: Data) -> String? {
-    guard
-        let obj = try? JSONSerialization.jsonObject(with: data),
-        let pretty = try? JSONSerialization.data(withJSONObject: obj, options: .prettyPrinted),
-        let str = String(data: pretty, encoding: .utf8)
-    else { return nil }
-    return str
-}
-
-/// unwrap `"payload"` → base64 → gunzip → JSON (expects `{ upc : [...] }`)
-private func unpackPayload(from root: Data, upc: String) -> String {
-    guard
-        let wrap = try? JSONSerialization.jsonObject(with: root) as? [String:Any],
-        let b64  = wrap["payload"] as? String,
-        let gz   = Data(base64Encoded: b64),
-        let raw  = gz.fullGunzip(),
-        let inner = try? JSONSerialization.jsonObject(with: raw) as? [String:Any]
-    else { return "❌ couldn’t decode payload" }
-
-    if let vec = inner[upc] as? [Any], !vec.isEmpty {
-        return "📦 \(upc) has \(vec.count) floats"
-    } else {
-        return "📦 \(upc) → empty array (no embedding yet)"
-    }
-}
-
-// ───────────────────────────────────────────────────────────────
-// MARK: – Minimal GZIP helper
-
-private extension Data {
+// MARK: – GZIP helper (unchanged from PoC)
+fileprivate extension Data {
     func fullGunzip() -> Data? {
         guard !isEmpty else { return self }
-
         var stream = z_stream()
         stream.next_in  = UnsafeMutablePointer<Bytef>(mutating:
             (self as NSData).bytes.bindMemory(to: Bytef.self, capacity: count))
         stream.avail_in = uInt(count)
 
-        let windowBits = 16 + MAX_WBITS
-        guard inflateInit2_(&stream, Int32(windowBits), ZLIB_VERSION,
+        guard inflateInit2_(&stream, 16+MAX_WBITS, ZLIB_VERSION,
                             Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
 
-        var out = Data()
-        let chunk = 16 * 1024
-        var status: Int32 = Z_OK
-
+        var out = Data(); let chunk = 16*1024; var status: Int32 = Z_OK
         while status == Z_OK {
-            var buffer = [UInt8](repeating: 0, count: chunk)
-            buffer.withUnsafeMutableBytes { ptr in
-                stream.next_out  = ptr.bindMemory(to: Bytef.self).baseAddress
+            var buf = [UInt8](repeating: 0, count: chunk)
+            buf.withUnsafeMutableBytes { p in
+                stream.next_out = p.bindMemory(to: Bytef.self).baseAddress
                 stream.avail_out = uInt(chunk)
                 status = inflate(&stream, Z_NO_FLUSH)
                 let written = chunk - Int(stream.avail_out)
-                out.append(ptr.baseAddress!.assumingMemoryBound(to: UInt8.self),
-                           count: written)
+                out.append(p.baseAddress!.assumingMemoryBound(to: UInt8.self), count: written)
             }
         }
         inflateEnd(&stream)
