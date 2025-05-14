@@ -1,10 +1,23 @@
-.onAppear {
-    fetchEmbeddingsJSON(for: "7062240121") { result in
-        switch result {
-        case .success(let json):
-            print(json)         // ← pretty-printed compact JSON
-        case .failure(let err):
-            print("API error:", err)
-        }
-    }
-}
+// 3) decode outer JSON   ─────────────────────────────────────────
+guard
+    let outer = try? JSONSerialization.jsonObject(with: data) as? [String:Any]
+else { throw NSError(domain: "decode", code: 1, userInfo: ["stage":"outer JSON"]) }
+
+print("DEBUG outer keys:", outer.keys)         // ← add
+
+guard
+    let payloadB64 = outer["payload"] as? String
+else { throw NSError(domain: "decode", code: 2, userInfo: ["stage":"payload key"]) }
+
+print("DEBUG b64 prefix:", payloadB64.prefix(20))   // ← add
+
+guard
+    let gz = Data(base64Encoded: payloadB64)
+else { throw NSError(domain: "decode", code: 3, userInfo: ["stage":"base-64"]) }
+
+print("DEBUG gz first bytes:", gz.prefix(3))   // ← add (should be 1F 8B 08)
+
+guard
+    let raw = gz.fullGunzip(),
+    let inner = try? JSONSerialization.jsonObject(with: raw) as? [String:Any]
+else { throw NSError(domain: "decode", code: 4, userInfo: ["stage":"gunzip / inner JSON"]) }
