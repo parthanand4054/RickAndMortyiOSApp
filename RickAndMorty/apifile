@@ -1,25 +1,121 @@
-// ── 6. extract embeddings array ───────────────────────────
-let embeddings: [Float]
+//
+//  ContentView.swift
+//  API quick-test  (clean)
+//
+//  Shows: { "status": "...", "errors": [ … ], "embeddings": [ … ] }
+//
 
-if let flat = inner[upc] as? [NSNumber], !flat.isEmpty {
-    // single vector
-    embeddings = flat.map { $0.floatValue }
+import SwiftUI
+import zlib                                            // gun-zip helper
 
-} else if
-    let multi = inner[upc] as? [[NSNumber]],
-    let first = multi.first,                     // use first vector
-    !first.isEmpty {
-    embeddings = first.map { $0.floatValue }
-//  ── optional:  concatenate all vectors instead ──────────
-//  embeddings = multi.flatMap { $0 }.map { $0.floatValue }
-} else {
-    throw EmbeddingAPIError.noVector             // really nothing there
+struct ContentView: View {
+    @State private var console = "Fetching…"
+
+    var body: some View {
+        ScrollView {
+            Text(console)
+                .font(.system(.body, design: .monospaced))
+                .padding()
+        }
+        // fetch once when the view appears
+        .onAppear { fetch(upc: "1600036245") }          // ← change UPC here
+    }
+
+    // MARK: – Networking
+    private func fetch(upc: String) {
+
+        // ── 1. request ----------------------------------------------------
+        var url = URL(string:
+            "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/embeddings/upc"
+        )!
+        url.append(queryItems: [.init(name: "upc_id", value: upc)])
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("c061c52a-b978-4ae9-9875-6584e58e8a74",
+                     forHTTPHeaderField: "wm_consumer.id")
+        req.setValue("Bearer eyJraWQiOiJkOTY5MzBhYy04YjhlLT...",     // ← JWT here
+                     forHTTPHeaderField: "Authorization")
+
+        let session = URLSession(configuration: .default,
+                                 delegate: InsecureTLSDelegate(),   // staging cert
+                                 delegateQueue: nil)
+
+        // ── 2. run --------------------------------------------------------
+        session.dataTask(with: req) { data, _, error in
+            guard error == nil, let data else { log("❌ \(error!.localizedDescription)"); return }
+
+            // ── 3. outer JSON -------------------------------------------
+            guard
+                let outer = try? JSONSerialization.jsonObject(with: data) as? [String:Any],
+                let status  = outer["status"],
+                let errors  = outer["errors"],
+                let b64     = outer["payload"] as? String,
+                let gz      = Data(base64Encoded: b64),
+                let raw     = gz.fullGunzip(),
+                let inner   = try? JSONSerialization.jsonObject(with: raw) as? [String:Any],
+                let embVal  = inner[upc]
+            else { log("❌ decode failed"); return }
+
+            // ── 4. compact dict -----------------------------------------
+            let compact: [String:Any] = [
+                "status"     : status,
+                "errors"     : errors,
+                "embeddings" : embVal                  // array or array-of-objects
+            ]
+            let pretty = try? JSONSerialization.data(withJSONObject: compact,
+                                                     options: .prettyPrinted)
+
+            if let pretty, let str = String(data: pretty, encoding: .utf8) {
+                log(str)
+            } else {
+                log("❌ couldn’t pretty-print JSON")
+            }
+        }.resume()
+    }
+
+    private func log(_ text: String) {
+        DispatchQueue.main.async { console = text; print(text) }
+    }
 }
 
+// MARK: – TLS helper (trust staging cert)
+private final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
+    func urlSession(_ s: URLSession, didReceive c: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if let trust = c.protectionSpace.serverTrust {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+}
 
+// MARK: – tiny GZIP helper
+private extension Data {
+    func fullGunzip() -> Data? {
+        guard !isEmpty else { return self }
 
-let compact: [String:Any] = [
-    "status"     : outer["status"] ?? "UNKNOWN",
-    "errors"     : outer["errors"] ?? [],
-    "embeddings" : embeddings                    // now always a [Float]
-]
+        var stream = z_stream()
+        stream.next_in  = UnsafeMutablePointer<Bytef>(mutating:
+            (self as NSData).bytes.bindMemory(to: Bytef.self, capacity: count))
+        stream.avail_in = uInt(count)
+
+        guard inflateInit2_(&stream, 16 + MAX_WBITS, ZLIB_VERSION,
+                            Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
+
+        var out = Data(); let chunk = 16 * 1024; var status: Int32 = Z_OK
+        while status == Z_OK {
+            var buf = [UInt8](repeating: 0, count: chunk)
+            buf.withUnsafeMutableBytes { p in
+                stream.next_out  = p.bindMemory(to: Bytef.self).baseAddress
+                stream.avail_out = uInt(chunk)
+                status = inflate(&stream, Z_NO_FLUSH)
+                let wrote = chunk - Int(stream.avail_out)
+                out.append(p.baseAddress!.assumingMemoryBound(to: UInt8.self), count: wrote)
+            }
+        }
+        inflateEnd(&stream)
+        return status == Z_STREAM_END ? out : nil
+    }
+}
