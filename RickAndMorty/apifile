@@ -1,59 +1,25 @@
-// MARK: – main async pipeline with step-by-step diagnostics
-func run(upc: String) async throws -> String {
+// ── 6. extract embeddings array ───────────────────────────
+let embeddings: [Float]
 
-    // ── 1. build request (same as before) ─────────────────────
-    var url = Self.baseURL
-    url.append(queryItems: [.init(name: "upc_id", value: upc)])
-    var req = URLRequest(url: url)
-    req.httpMethod = "GET"
-    req.setValue(Self.consumerID,                forHTTPHeaderField: "wm_consumer.id")
-    req.setValue("Bearer \(Self.bearerJWT)",     forHTTPHeaderField: "Authorization")
+if let flat = inner[upc] as? [NSNumber], !flat.isEmpty {
+    // single vector
+    embeddings = flat.map { $0.floatValue }
 
-    // ── 2. network call ───────────────────────────────────────
-    let (data, resp) = try await URLSession(configuration: .default,
-                                            delegate: InsecureTLSDelegate(),
-                                            delegateQueue: nil)
-                             .data(for: req)
-    guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-        throw URLError(.badServerResponse)
-    }
-
-    // ── 3. OUTER JSON ─────────────────────────────────────────
-    guard let outer = try? JSONSerialization.jsonObject(with: data) as? [String:Any] else {
-        print("STEP 3 ❌ unable to parse outer JSON"); throw EmbeddingAPIError.decode
-    }
-    print("STEP 3 ✅ outer keys:", outer.keys)
-
-    // ── 4. base-64 decode ─────────────────────────────────────
-    guard let b64 = outer["payload"] as? String, !b64.isEmpty else {
-        print("STEP 4 ❌ 'payload' key missing or empty"); throw EmbeddingAPIError.decode
-    }
-    guard let gz = Data(base64Encoded: b64) else {
-        print("STEP 4 ❌ base-64 decode failed"); throw EmbeddingAPIError.decode
-    }
-    print("STEP 4 ✅ base-64 decoded – first 3 bytes:", gz.prefix(3).map { String(format:"%02X",$0) })
-
-    // ── 5. gunzip + inner JSON ────────────────────────────────
-    guard
-        let raw   = gz.fullGunzip(),
-        let inner = try? JSONSerialization.jsonObject(with: raw) as? [String:Any]
-    else {
-        print("STEP 5 ❌ gunzip or inner-JSON parse failed"); throw EmbeddingAPIError.decode
-    }
-    print("STEP 5 ✅ inner keys:", inner.keys)
-
-    // ── 6. extract embeddings array ───────────────────────────
-    guard let vecNS = inner[upc] as? [NSNumber], !vecNS.isEmpty else {
-        throw EmbeddingAPIError.noVector
-    }
-    let vec = vecNS.map { $0.floatValue }
-
-    // ── 7. compact JSON output ────────────────────────────────
-    let compact: [String:Any] = [
-        "status"     : outer["status"] ?? "UNKNOWN",
-        "errors"     : outer["errors"] ?? [],
-        "embeddings" : vec
-    ]
-    let pretty = try JSONSerialization.data(withJSONObject: compact, options: .prettyPrinted)
-    return String(data: pretty, encoding: .utf8)!
+} else if
+    let multi = inner[upc] as? [[NSNumber]],
+    let first = multi.first,                     // use first vector
+    !first.isEmpty {
+    embeddings = first.map { $0.floatValue }
+//  ── optional:  concatenate all vectors instead ──────────
+//  embeddings = multi.flatMap { $0 }.map { $0.floatValue }
+} else {
+    throw EmbeddingAPIError.noVector             // really nothing there
 }
+
+
+
+let compact: [String:Any] = [
+    "status"     : outer["status"] ?? "UNKNOWN",
+    "errors"     : outer["errors"] ?? [],
+    "embeddings" : embeddings                    // now always a [Float]
+]
