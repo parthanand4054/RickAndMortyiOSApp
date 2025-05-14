@@ -1,57 +1,45 @@
 //
-//  EmbeddingAPI.swift
+//  Data+Gunzip.swift
 //
-//  Networking helper: UPC ➜ [Float] embeddings
+//  A tiny GZIP inflator that works on every iOS version
 //
 
 import Foundation
-import zlib                               // for fullGunzip()
+import zlib
 
-enum EmbeddingAPIError: Error {
-    case http(Int)
-    case decode
-    case noVector
-}
+extension Data {
+    /// Full GZIP inflator using zlib (windowBits = 16 + MAX_WBITS)
+    func fullGunzip() -> Data? {
+        guard !isEmpty else { return self }
 
-struct EmbeddingAPI {
+        var stream = z_stream()
+        stream.next_in  = UnsafeMutablePointer<Bytef>(mutating:
+            (self as NSData).bytes.bindMemory(to: Bytef.self, capacity: count))
+        stream.avail_in = uInt(count)
 
-    // ── static config (paste fresh JWT when it expires) ─────────
-    private static let consumerID = "c061c52a-b978-4ae9-9875-6584e58e8a74"
-    private static let bearerJWT  = """
-    eyJraWQiOiJkOTY5MzBhYy04YjhlLTRkMDA0TGE1Ny05MGYyYWQwN...
-    """
+        let windowBits = 16 + MAX_WBITS            // +16 = gzip header/trailer
+        guard inflateInit2_(&stream,
+                            Int32(windowBits),
+                            ZLIB_VERSION,
+                            Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
 
-    private static let baseURL = URL(string:
-        "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/embeddings/upc"
-    )!
+        var output = Data()
+        let chunk  = 16 * 1024
+        var status: Int32 = Z_OK
 
-    // ────────────────────────────────────────────────────────────
-    static func fetchEmbeddings(for upc: String) async throws -> [Float] {
+        while status == Z_OK {
+            var buffer = [UInt8](repeating: 0, count: chunk)
+            buffer.withUnsafeMutableBytes { outPtr in
+                stream.next_out  = outPtr.bindMemory(to: Bytef.self).baseAddress
+                stream.avail_out = uInt(chunk)
+                status = inflate(&stream, Z_NO_FLUSH)
+                let written = chunk - Int(stream.avail_out)
+                output.append(outPtr.baseAddress!.assumingMemoryBound(to: UInt8.self),
+                              count: written)
+            }
+        }
 
-        // build url …/upc?upc_id=XXXX
-        var url = baseURL
-        url.append(queryItems: [.init(name: "upc_id", value: upc)])
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.setValue(consumerID,                     forHTTPHeaderField: "wm_consumer.id")
-        req.setValue("Bearer \(bearerJWT)",          forHTTPHeaderField: "Authorization")
-
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        guard let http = resp as? HTTPURLResponse, http.statusCode == 200
-        else { throw EmbeddingAPIError.http((resp as? HTTPURLResponse)?.statusCode ?? -1) }
-
-        // outer JSON
-        guard
-            let root      = try? JSONSerialization.jsonObject(with: data) as? [String:Any],
-            let payload64 = root["payload"] as? String,
-            let gz        = Data(base64Encoded: payload64),
-            let raw       = gz.fullGunzip(),                       // helper in Data+Gunzip.swift
-            let inner     = try? JSONSerialization.jsonObject(with: raw) as? [String:Any],
-            let vecNS     = inner[upc] as? [NSNumber],
-            !vecNS.isEmpty
-        else { throw EmbeddingAPIError.noVector }
-
-        return vecNS.map { $0.floatValue }
+        inflateEnd(&stream)
+        return status == Z_STREAM_END ? output : nil
     }
 }
