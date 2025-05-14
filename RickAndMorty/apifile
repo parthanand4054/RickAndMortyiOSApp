@@ -1,94 +1,27 @@
-//
-//  EmbeddingMatcher.swift
-//
-//  ⌁  Loads a catalogue lazily: if a UPC isn’t cached, it fetches via EmbeddingAPI.
-//
+// MARK: - runs embedding matching every Nth frame
+func runMatchingOnBoundingBoxes(for frame: CGImage) {
+    guard let boxes = self.boundingBoxes, !boxes.isEmpty else { return }
 
-import Foundation
+    var updated = boxes
+    let group   = DispatchGroup()
+    let lock    = DispatchQueue(label: "org.walmart.boundingBoxLock")
 
-class EmbeddingMatcher {
+    for index in boxes.indices {
+        group.enter()
+        Task.detached {                                 //  ← async context
+            let upc = boxes[index].id.description       // your UPC derivation here
+            await self.inferenceVM.embeddingMatcher?.ensureEmbeddings(for: upc)
 
-    // MARK: - Types
-    typealias Embeddings = [String: [[Float]]]
+            let matchID = self.inferenceVM.match(detection: boxes[index], from: frame)
 
-    // MARK: - Stored
-    private(set) var catalogue: Embeddings          // now starts empty
-    private var lruCache = LRUCache(capacity: 50)
-
-    // Settings
-    private let embeddingSampleSize = 2
-    private let cutoffThreshold: Float = 0.10
-    private let minCacheMatch:   Float = 0.93
-
-    // MARK: - Init
-    /// Pass a JSON filename for offline dev; otherwise start empty.
-    init(jsonFileName: String? = nil) {
-        if
-            let name = jsonFileName,
-            let path = Bundle.main.path(forResource: name, ofType: "json"),
-            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
-            let cat  = try? JSONDecoder().decode(Embeddings.self, from: data) {
-            self.catalogue = cat
-            print("EmbeddingMatcher: loaded \(cat.count) UPCs from \(name).json")
-        } else {
-            self.catalogue = [:]
-            print("EmbeddingMatcher: starting with empty catalogue – will fetch on demand.")
-        }
-    }
-
-    // MARK: - Lazy network fill
-    @MainActor
-    func ensureEmbeddings(for upc: String) async {
-        guard catalogue[upc] == nil else { return }         // already cached
-        do {
-            let vec = try await EmbeddingAPI.fetchEmbeddings(for: upc)
-            catalogue[upc] = [vec]                          // server gives one vector
-            print("📥 fetched embeddings for \(upc) (\(vec.count) dims)")
-        } catch {
-            print("⚠️ could not fetch embeddings for \(upc): \(error)")
-        }
-    }
-
-    // MARK: - Public matching API  (unchanged below)
-    func getNearestMatch(embedding: [Float], seenThreshold: Float = 0.88) -> (String, Float) {
-        var closestProd = ""
-        var mostSim: Float = -.infinity
-
-        // 1) check LRU cache first
-        if lruCache.count > 0 {
-            for prod in lruCache.seen {
-                if let vectors = catalogue[prod] {
-                    for v in vectors {
-                        let sim = abs(cosineSim(A: embedding, B: v))
-                        if sim > mostSim { mostSim = sim; closestProd = prod }
-                    }
-                }
+            if let matchID {
+                lock.sync { updated[index].prodID = matchID }
             }
+            group.leave()
         }
-        if mostSim > minCacheMatch { return (closestProd, mostSim) }
-
-        // 2) brute-force the entire catalogue
-        for (prod, vectors) in catalogue {
-            let shuffled = vectors.shuffled()
-            for i in 0..<max(1, shuffled.count / embeddingSampleSize) {
-                let sim = abs(cosineSim(A: embedding, B: shuffled[i]))
-                if sim > mostSim {
-                    mostSim = sim
-                    closestProd = prod
-                } else if sim < cutoffThreshold {
-                    break
-                }
-            }
-        }
-
-        if mostSim < 0.7 { return ("", mostSim) }   // poor match
-        return (closestProd, mostSim)
     }
 
-    func addToSeen(prodID: String) { lruCache.insert(prodID) }
-
-    // -- helpers ------------------------------------------------------------
-    private func cosineSim(A: [Float], B: [Float]) -> Float { dot(A,B)/(mag(A)*mag(B)) }
-    private func dot(_ A:[Float],_ B:[Float]) -> Float { zip(A,B).reduce(0){$0+$1.0*$1.1} }
-    private func mag(_ A:[Float]) -> Float { sqrt(A.reduce(0){$0+$1*$1}) }
+    group.notify(queue: .main) {
+        self.boundingBoxes = updated
+    }
 }
