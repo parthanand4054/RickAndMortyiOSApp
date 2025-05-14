@@ -1,45 +1,94 @@
 //
-//  Data+Gunzip.swift
+//  EmbeddingMatcher.swift
 //
-//  A tiny GZIP inflator that works on every iOS version
+//  ⌁  Loads a catalogue lazily: if a UPC isn’t cached, it fetches via EmbeddingAPI.
 //
 
 import Foundation
-import zlib
 
-extension Data {
-    /// Full GZIP inflator using zlib (windowBits = 16 + MAX_WBITS)
-    func fullGunzip() -> Data? {
-        guard !isEmpty else { return self }
+class EmbeddingMatcher {
 
-        var stream = z_stream()
-        stream.next_in  = UnsafeMutablePointer<Bytef>(mutating:
-            (self as NSData).bytes.bindMemory(to: Bytef.self, capacity: count))
-        stream.avail_in = uInt(count)
+    // MARK: - Types
+    typealias Embeddings = [String: [[Float]]]
 
-        let windowBits = 16 + MAX_WBITS            // +16 = gzip header/trailer
-        guard inflateInit2_(&stream,
-                            Int32(windowBits),
-                            ZLIB_VERSION,
-                            Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
+    // MARK: - Stored
+    private(set) var catalogue: Embeddings          // now starts empty
+    private var lruCache = LRUCache(capacity: 50)
 
-        var output = Data()
-        let chunk  = 16 * 1024
-        var status: Int32 = Z_OK
+    // Settings
+    private let embeddingSampleSize = 2
+    private let cutoffThreshold: Float = 0.10
+    private let minCacheMatch:   Float = 0.93
 
-        while status == Z_OK {
-            var buffer = [UInt8](repeating: 0, count: chunk)
-            buffer.withUnsafeMutableBytes { outPtr in
-                stream.next_out  = outPtr.bindMemory(to: Bytef.self).baseAddress
-                stream.avail_out = uInt(chunk)
-                status = inflate(&stream, Z_NO_FLUSH)
-                let written = chunk - Int(stream.avail_out)
-                output.append(outPtr.baseAddress!.assumingMemoryBound(to: UInt8.self),
-                              count: written)
+    // MARK: - Init
+    /// Pass a JSON filename for offline dev; otherwise start empty.
+    init(jsonFileName: String? = nil) {
+        if
+            let name = jsonFileName,
+            let path = Bundle.main.path(forResource: name, ofType: "json"),
+            let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+            let cat  = try? JSONDecoder().decode(Embeddings.self, from: data) {
+            self.catalogue = cat
+            print("EmbeddingMatcher: loaded \(cat.count) UPCs from \(name).json")
+        } else {
+            self.catalogue = [:]
+            print("EmbeddingMatcher: starting with empty catalogue – will fetch on demand.")
+        }
+    }
+
+    // MARK: - Lazy network fill
+    @MainActor
+    func ensureEmbeddings(for upc: String) async {
+        guard catalogue[upc] == nil else { return }         // already cached
+        do {
+            let vec = try await EmbeddingAPI.fetchEmbeddings(for: upc)
+            catalogue[upc] = [vec]                          // server gives one vector
+            print("📥 fetched embeddings for \(upc) (\(vec.count) dims)")
+        } catch {
+            print("⚠️ could not fetch embeddings for \(upc): \(error)")
+        }
+    }
+
+    // MARK: - Public matching API  (unchanged below)
+    func getNearestMatch(embedding: [Float], seenThreshold: Float = 0.88) -> (String, Float) {
+        var closestProd = ""
+        var mostSim: Float = -.infinity
+
+        // 1) check LRU cache first
+        if lruCache.count > 0 {
+            for prod in lruCache.seen {
+                if let vectors = catalogue[prod] {
+                    for v in vectors {
+                        let sim = abs(cosineSim(A: embedding, B: v))
+                        if sim > mostSim { mostSim = sim; closestProd = prod }
+                    }
+                }
+            }
+        }
+        if mostSim > minCacheMatch { return (closestProd, mostSim) }
+
+        // 2) brute-force the entire catalogue
+        for (prod, vectors) in catalogue {
+            let shuffled = vectors.shuffled()
+            for i in 0..<max(1, shuffled.count / embeddingSampleSize) {
+                let sim = abs(cosineSim(A: embedding, B: shuffled[i]))
+                if sim > mostSim {
+                    mostSim = sim
+                    closestProd = prod
+                } else if sim < cutoffThreshold {
+                    break
+                }
             }
         }
 
-        inflateEnd(&stream)
-        return status == Z_STREAM_END ? output : nil
+        if mostSim < 0.7 { return ("", mostSim) }   // poor match
+        return (closestProd, mostSim)
     }
+
+    func addToSeen(prodID: String) { lruCache.insert(prodID) }
+
+    // -- helpers ------------------------------------------------------------
+    private func cosineSim(A: [Float], B: [Float]) -> Float { dot(A,B)/(mag(A)*mag(B)) }
+    private func dot(_ A:[Float],_ B:[Float]) -> Float { zip(A,B).reduce(0){$0+$1.0*$1.1} }
+    private func mag(_ A:[Float]) -> Float { sqrt(A.reduce(0){$0+$1*$1}) }
 }
