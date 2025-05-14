@@ -1,1 +1,57 @@
-https://drive.google.com/drive/folders/1KJdnjzrsvNhv43Y1DmEJjcb9RPBLKiyE?usp=sharing
+//
+//  EmbeddingAPI.swift
+//
+//  Networking helper: UPC ➜ [Float] embeddings
+//
+
+import Foundation
+import zlib                               // for fullGunzip()
+
+enum EmbeddingAPIError: Error {
+    case http(Int)
+    case decode
+    case noVector
+}
+
+struct EmbeddingAPI {
+
+    // ── static config (paste fresh JWT when it expires) ─────────
+    private static let consumerID = "c061c52a-b978-4ae9-9875-6584e58e8a74"
+    private static let bearerJWT  = """
+    eyJraWQiOiJkOTY5MzBhYy04YjhlLTRkMDA0TGE1Ny05MGYyYWQwN...
+    """
+
+    private static let baseURL = URL(string:
+        "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/embeddings/upc"
+    )!
+
+    // ────────────────────────────────────────────────────────────
+    static func fetchEmbeddings(for upc: String) async throws -> [Float] {
+
+        // build url …/upc?upc_id=XXXX
+        var url = baseURL
+        url.append(queryItems: [.init(name: "upc_id", value: upc)])
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(consumerID,                     forHTTPHeaderField: "wm_consumer.id")
+        req.setValue("Bearer \(bearerJWT)",          forHTTPHeaderField: "Authorization")
+
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, http.statusCode == 200
+        else { throw EmbeddingAPIError.http((resp as? HTTPURLResponse)?.statusCode ?? -1) }
+
+        // outer JSON
+        guard
+            let root      = try? JSONSerialization.jsonObject(with: data) as? [String:Any],
+            let payload64 = root["payload"] as? String,
+            let gz        = Data(base64Encoded: payload64),
+            let raw       = gz.fullGunzip(),                       // helper in Data+Gunzip.swift
+            let inner     = try? JSONSerialization.jsonObject(with: raw) as? [String:Any],
+            let vecNS     = inner[upc] as? [NSNumber],
+            !vecNS.isEmpty
+        else { throw EmbeddingAPIError.noVector }
+
+        return vecNS.map { $0.floatValue }
+    }
+}
