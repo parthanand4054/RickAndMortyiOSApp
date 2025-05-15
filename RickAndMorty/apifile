@@ -1,181 +1,114 @@
 //
-//  EmbeddingMatcher.swift
+//  InferenceViewModel.swift
 
+// MARK: - FILE DESCRIPTION
+/// This is a wrapper for the ML pipeline
+/// Provides 2 main functions:-
+/// 1) localize function - runs object detection on an image and returns bounding boxes
+/// 2) match function - extracts the embedding for a detection and find the best product match
 
 import Foundation
+import SwiftUI
+import UIKit
 
-class EmbeddingMatcher {
-    typealias Embeddings = [String: [[Float]]]
-    private var catalogue: Embeddings = [:]
-    var lruCache: LRUCache = LRUCache(capacity: 50)
-    private var apiService = EmbeddingsAPIService()
+///  Wrapper class for ProductEmbedder and EmbeddingMatcher
+class InferenceViewModel: ObservableObject {    
+    /// Handles running inference using the TFLite models
+    private var productEmbedder: ProductEmbedder?
     
-    // Embedding Matcher Settings
-    private let embeddingSampleSize: Int = 2
-    private let cutoffThreshold: Float = 0.10
-    private let minCacheMatch: Float = 0.93
+    /// Handles matching image embeddings to images in a catalogue
+    private var embeddingMatcher: EmbeddingMatcher?
     
-    /// Initialize the embedding matcher
-    ///
-    /// - Parameter jsonFileName: file name for JSON file which contains [product1ID: [embedding1, embedding2, ...], product2ID: [embedding1, embedding2, ...], ...]
-    /// - Returns: initialized EmbeddingMatcher if the JSON file is successfully loaded and decoded
-    init?(jsonFileName: String? = nil) {
-        // We'll still keep the ability to load from JSON file for testing purposes
-        if let jsonFileName = jsonFileName {
-            do {
-                if let filePath = Bundle.main.path(forResource: jsonFileName, ofType: "json") {
-                    let fileUrl = URL(fileURLWithPath: filePath)
-                    let json = try Data(contentsOf: fileUrl)
-                    self.catalogue = try JSONDecoder().decode(Embeddings.self, from: json)
-                    print("Successfully initialized the embedding matcher from JSON file")
-                } else {
-                    print("Failed to make filepath, initializing with empty catalogue")
+    // Settings
+    let useCoreML: Bool = true
+    
+    // Models
+    private let objDet: ModelType = ModelType(info: FileInfo("YOLOV8", "tflite"), title: "ObjectDetection")
+    private let smallEmbedder: ModelType = ModelType(info: FileInfo("mobilevit", "tflite"), title: "SmallEmbedder")
+    
+    // State for API requests
+    @Published var isLoading = false
+    @Published var errorMessage: String?
+
+    /// Initializes a wrapper class to handle object localization, image embedding, and embedding matching
+    init() {
+        self.productEmbedder = nil
+        self.embeddingMatcher = EmbeddingMatcher()  // Initialize without JSON file
+        self.makeProductEmbedder(useCoreML: useCoreML)
+    }
+    
+    /// Initializes a product embedder that uses the CoreML delegate
+    func makeProductEmbedder(useCoreML: Bool) {
+        if useCoreML {
+            ProductEmbedder.newCoreMLEmbedder(localizerModelFileInfo: objDet.info, embedderModelFileInfo: smallEmbedder.info) { result in
+                switch result {
+                case .success(let embedder):
+                    self.productEmbedder = embedder
+                case.error(let wrappedError):
+                    print("Failed to initialize: \(wrappedError)")
                 }
-            } catch let error {
-                print("Error initializing from JSON: \(error.localizedDescription), initializing with empty catalogue")
             }
-        } else {
-            print("Initializing embedding matcher with empty catalogue, will fetch embeddings from API")
         }
     }
     
-    /// Match a list of embeddings to products in our catalogue
-    ///
-    /// - Parameter embeddings: list of Embedding data types (includes a detection ID and embedding)
-    /// - Returns: list of (detectionID, prodID, similarity score) tuples
-    func matchAllEmbeddings(embeddings: [Embedding]) async -> [(Int, String, Float)] {
-        let processors = ProcessInfo.processInfo.activeProcessorCount
-
-        let pooledResults: [(Int, String, Float)] = await withTaskGroup(of: [(Int, String, Float)].self) { group in
-            var matches = [(Int, String, Float)]()
-            
-            for i in 0..<Int(processors) {
-                group.addTask {
-                    var localMatches = [(Int, String, Float)]()
-
-                    let lowerBound = Float(i)/Float(processors) * Float(embeddings.count)
-                    let upperBound = Float(i+1)/Float(processors) * Float(embeddings.count)
-
-                    for index in Int(lowerBound)..<Int(upperBound) {
-                        let match = self.getNearestMatch(embedding: embeddings[index].embedding)
-                            
-                        let res = (embeddings[index].id, match.0, match.1)
-                        localMatches.append(res)
-                    }
-                    return localMatches
-                }
-            }
-                
-            for await value in group {
-                matches.append(contentsOf: value)
-            }
-            return matches
+    /// Returns bounding boxes of objects detected in the input image
+    func localize(uiImage: UIImage) -> [BoundingBox]? {
+        let objectDetResult = productEmbedder?.runObjectLocalization(frame: uiImage)
+        switch objectDetResult {
+        case let .success(objectDetResult):
+            return objectDetResult.boundingBoxes
+        case .error(_):
+            return nil
+        case .none:
+            return nil
         }
-        
-        return pooledResults
     }
     
-    /// Get the nearest match of one embedding
-    ///
-    /// - Parameter embedding: embedding of one object
-    /// - Returns: (ProdID, Similarity Score) of best match
-    func getNearestMatch(embedding: [Float], seenThreshold: Float = 0.88) -> (String, Float) {
-        var closestProd = ""
-        var mostSim = -Float.infinity
-        
-        // First check our cache of recently seen products.
-        if self.lruCache.count > 0 {
-            for prod in self.lruCache.seen {
-                // Safely unwrap the catalogue entry.
-                if let prodEmbeddings = self.catalogue[prod] {
-                    for prodEmbedding in prodEmbeddings {
-                        let sim = abs(cosineSim(A: embedding, B: prodEmbedding))
-                        if sim > mostSim {
-                            mostSim = sim
-                            closestProd = prod
-                        }
-                    }
-                }
-            }
-        }
-        
-        if mostSim > minCacheMatch {
-            return (closestProd, mostSim)
-        }
-        
-        // If no good match was found in the cache, check all products in the catalogue.
-        for prod in self.catalogue.keys {
-            // Force-unwrapping here is acceptable if you are sure every key in the catalogue exists.
-            let shuffled = self.catalogue[prod]!.shuffled()
-            // We randomly sample a subset of the embeddings for efficiency.
-            for i in 0..<max(1, Int(shuffled.count / embeddingSampleSize)) {
-                let sim = abs(cosineSim(A: embedding, B: shuffled[i]))
-                if sim > mostSim {
-                    mostSim = sim
-                    closestProd = prod
-                } else if sim < cutoffThreshold {
-                    break
-                }
-            }
-        }
-        
-        // Add this check to reject poor matches
-        if mostSim < 0.7 {
-            print("poor match \(mostSim)")
-            return ("", mostSim) // Return empty string for no match
-        }
-        
-        return (closestProd, mostSim)
-    }
-    
-    /// Fetch embeddings for a specific product ID from the API
+    /// Fetches embeddings for a specific product ID
     /// - Parameters:
     ///   - productID: The product ID to fetch embeddings for
-    ///   - completion: Callback when the fetch completes
+    ///   - completion: Callback when fetching completes
     func fetchEmbeddings(for productID: String, completion: @escaping (Bool) -> Void) {
-        apiService.fetchEmbeddings(upc: productID) { [weak self] result in
-            guard let self = self else { completion(false); return }
-            
-            switch result {
-            case .success(let embeddings):
-                // Update the local catalogue with the new embeddings
-                for (id, embeddingsArray) in embeddings {
-                    self.catalogue[id] = embeddingsArray
-                }
-                print("Successfully fetched embeddings for \(productID)")
-                completion(true)
-                
-            case .failure(let error):
-                print("Failed to fetch embeddings: \(error.localizedDescription)")
+        guard let embeddingMatcher = embeddingMatcher else {
+            DispatchQueue.main.async {
+                self.errorMessage = "Embedding matcher not initialized"
                 completion(false)
+            }
+            return
+        }
+        
+        DispatchQueue.main.async {
+            self.isLoading = true
+            self.errorMessage = nil
+        }
+        
+        embeddingMatcher.fetchEmbeddings(for: productID) { success in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                if !success {
+                    self.errorMessage = "Failed to fetch embeddings for \(productID)"
+                }
+                completion(success)
             }
         }
     }
     
-    func addToSeen(prodID: String){
-        self.lruCache.insert(prodID)
-    }
-    
-    /** Cosine similarity **/
-    private func cosineSim(A: [Float], B: [Float]) -> Float {
-        return dot(A: A, B: B) / (magnitude(A: A) * magnitude(A: B))
-    }
-
-    /** Dot Product **/
-    private func dot(A: [Float], B: [Float]) -> Float {
-        var x: Float = 0
-        for i in 0...min(A.count, B.count)-1 {
-            x += A[i] * B[i]
+    /// Returns the product ID of the closest match to the product in the bounding box
+    func match(detection: BoundingBox, from cgImage: CGImage) -> String? {
+        // Embed the image
+        guard let embedding = productEmbedder?.embed(detection: detection, from: UIImage(cgImage: cgImage)) else { return nil}
+        
+        // Match the embedding to a product ID
+        guard let match = self.embeddingMatcher?.getNearestMatch(embedding: embedding) else { return nil }
+        
+        // Only consider it a match if there's an actual product ID
+        if match.0.isEmpty {
+            return nil
         }
-        return x
-    }
-
-    /** Vector Magnitude **/
-    private func magnitude(A: [Float]) -> Float {
-        var x: Float = 0
-        for elt in A {
-            x += elt * elt
-        }
-        return sqrt(x)
+        
+        // Add the productID to our recently seen cache
+        self.embeddingMatcher?.addToSeen(prodID: match.0)
+        
+        return match.0
     }
 }
