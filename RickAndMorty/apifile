@@ -1,132 +1,181 @@
 //
-//  EmbeddingsAPIService.swift
-//
+//  EmbeddingMatcher.swift
+
 
 import Foundation
-import zlib
 
-class EmbeddingsAPIService {
+class EmbeddingMatcher {
+    typealias Embeddings = [String: [[Float]]]
+    private var catalogue: Embeddings = [:]
+    var lruCache: LRUCache = LRUCache(capacity: 50)
+    private var apiService = EmbeddingsAPIService()
     
-    /// Fetch embeddings for a specific UPC
-    /// - Parameters:
-    ///   - upc: The UPC identifier for the product
-    ///   - completion: Callback with the result containing embeddings or an error
-    func fetchEmbeddings(upc: String, completion: @escaping (Result<[String: [[Float]]], Error>) -> Void) {
-        // 1. build request
-        var url = URL(string:
-            "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/embeddings/upc"
-        )!
-        url.append(queryItems: [.init(name: "upc_id", value: upc)])
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.setValue("c061c52a-b978-4ae9-9875-6584e58e8a74",         // consumer-id
-                     forHTTPHeaderField: "wm_consumer.id")
-        req.setValue("Bearer eyJraWQiOiJkOTY5MzBhYy04YjhlLT...",     // ← fresh JWT
-                     forHTTPHeaderField: "Authorization")
-
-        let session = URLSession(configuration: .default,
-                                 delegate: InsecureTLSDelegate(),
-                                 delegateQueue: nil)
-
-        // 2. run
-        session.dataTask(with: req) { data, _, error in
-            if let error = error {
-                completion(.failure(error))
-                return
-            }
-            
-            guard let data = data else {
-                completion(.failure(NSError(domain: "EmbeddingsAPIService", code: 1, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
-                return
-            }
-
-            // 3. outer JSON
+    // Embedding Matcher Settings
+    private let embeddingSampleSize: Int = 2
+    private let cutoffThreshold: Float = 0.10
+    private let minCacheMatch: Float = 0.93
+    
+    /// Initialize the embedding matcher
+    ///
+    /// - Parameter jsonFileName: file name for JSON file which contains [product1ID: [embedding1, embedding2, ...], product2ID: [embedding1, embedding2, ...], ...]
+    /// - Returns: initialized EmbeddingMatcher if the JSON file is successfully loaded and decoded
+    init?(jsonFileName: String? = nil) {
+        // We'll still keep the ability to load from JSON file for testing purposes
+        if let jsonFileName = jsonFileName {
             do {
-                guard
-                    let outer = try JSONSerialization.jsonObject(with: data) as? [String:Any],
-                    let status = outer["status"] as? String,
-                    let b64 = outer["payload"] as? String,
-                    let gz = Data(base64Encoded: b64),
-                    let raw = gz.fullGunzip(),
-                    let inner = try JSONSerialization.jsonObject(with: raw) as? [String:Any]
-                else { 
-                    completion(.failure(NSError(domain: "EmbeddingsAPIService", code: 2, userInfo: [NSLocalizedDescriptionKey: "Decode failed"])))
-                    return
+                if let filePath = Bundle.main.path(forResource: jsonFileName, ofType: "json") {
+                    let fileUrl = URL(fileURLWithPath: filePath)
+                    let json = try Data(contentsOf: fileUrl)
+                    self.catalogue = try JSONDecoder().decode(Embeddings.self, from: json)
+                    print("Successfully initialized the embedding matcher from JSON file")
+                } else {
+                    print("Failed to make filepath, initializing with empty catalogue")
                 }
-                
-                if status != "OK" {
-                    completion(.failure(NSError(domain: "EmbeddingsAPIService", code: 3, userInfo: [NSLocalizedDescriptionKey: "API returned status: \(status)"])))
-                    return
+            } catch let error {
+                print("Error initializing from JSON: \(error.localizedDescription), initializing with empty catalogue")
+            }
+        } else {
+            print("Initializing embedding matcher with empty catalogue, will fetch embeddings from API")
+        }
+    }
+    
+    /// Match a list of embeddings to products in our catalogue
+    ///
+    /// - Parameter embeddings: list of Embedding data types (includes a detection ID and embedding)
+    /// - Returns: list of (detectionID, prodID, similarity score) tuples
+    func matchAllEmbeddings(embeddings: [Embedding]) async -> [(Int, String, Float)] {
+        let processors = ProcessInfo.processInfo.activeProcessorCount
+
+        let pooledResults: [(Int, String, Float)] = await withTaskGroup(of: [(Int, String, Float)].self) { group in
+            var matches = [(Int, String, Float)]()
+            
+            for i in 0..<Int(processors) {
+                group.addTask {
+                    var localMatches = [(Int, String, Float)]()
+
+                    let lowerBound = Float(i)/Float(processors) * Float(embeddings.count)
+                    let upperBound = Float(i+1)/Float(processors) * Float(embeddings.count)
+
+                    for index in Int(lowerBound)..<Int(upperBound) {
+                        let match = self.getNearestMatch(embedding: embeddings[index].embedding)
+                            
+                        let res = (embeddings[index].id, match.0, match.1)
+                        localMatches.append(res)
+                    }
+                    return localMatches
                 }
+            }
                 
-                // 4. Process the inner content to extract embeddings
-                var result = [String: [[Float]]]()
-                
-                for (upcKey, rawEmb) in inner {
-                    var vectors = [[Float]]()
-                    
-                    // Handle different possible formats of embeddings
-                    if let oneVec = rawEmb as? [NSNumber] {
-                        vectors = [oneVec.map { $0.floatValue }]
-                    } else if let arrArr = rawEmb as? [[NSNumber]] {
-                        vectors = arrArr.map { $0.map { $0.floatValue } }
-                    } else if let objArr = rawEmb as? [[String:Any]] {
-                        for obj in objArr {
-                            if let vecNS = obj["embedding"] as? [NSNumber] {
-                                vectors.append(vecNS.map { $0.floatValue })
-                            }
+            for await value in group {
+                matches.append(contentsOf: value)
+            }
+            return matches
+        }
+        
+        return pooledResults
+    }
+    
+    /// Get the nearest match of one embedding
+    ///
+    /// - Parameter embedding: embedding of one object
+    /// - Returns: (ProdID, Similarity Score) of best match
+    func getNearestMatch(embedding: [Float], seenThreshold: Float = 0.88) -> (String, Float) {
+        var closestProd = ""
+        var mostSim = -Float.infinity
+        
+        // First check our cache of recently seen products.
+        if self.lruCache.count > 0 {
+            for prod in self.lruCache.seen {
+                // Safely unwrap the catalogue entry.
+                if let prodEmbeddings = self.catalogue[prod] {
+                    for prodEmbedding in prodEmbeddings {
+                        let sim = abs(cosineSim(A: embedding, B: prodEmbedding))
+                        if sim > mostSim {
+                            mostSim = sim
+                            closestProd = prod
                         }
                     }
-                    
-                    if !vectors.isEmpty {
-                        result[upcKey] = vectors
-                    }
                 }
-                
-                completion(.success(result))
-                
-            } catch {
-                completion(.failure(error))
-            }
-        }.resume()
-    }
-}
-
-// Helper class for handling insecure TLS for staging
-private final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
-    func urlSession(_ s: URLSession, didReceive c: URLAuthenticationChallenge,
-                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        if let trust = c.protectionSpace.serverTrust {
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
-}
-
-// Tiny GZIP helper
-extension Data {
-    func fullGunzip() -> Data? {
-        guard !isEmpty else { return self }
-        var stream = z_stream()
-        stream.next_in  = UnsafeMutablePointer<Bytef>(mutating:
-            (self as NSData).bytes.bindMemory(to: Bytef.self, capacity: count))
-        stream.avail_in = uInt(count)
-        guard inflateInit2_(&stream, 16 + MAX_WBITS, ZLIB_VERSION,
-                            Int32(MemoryLayout<z_stream>.size)) == Z_OK else { return nil }
-        var out = Data(); let chunk = 16 * 1024; var status: Int32 = Z_OK
-        while status == Z_OK {
-            var buf = [UInt8](repeating: 0, count: chunk)
-            buf.withUnsafeMutableBytes { p in
-                stream.next_out  = p.bindMemory(to: Bytef.self).baseAddress
-                stream.avail_out = uInt(chunk)
-                status = inflate(&stream, Z_NO_FLUSH)
-                out.append(p.baseAddress!.assumingMemoryBound(to: UInt8.self),
-                           count: chunk - Int(stream.avail_out))
             }
         }
-        inflateEnd(&stream)
-        return status == Z_STREAM_END ? out : nil
+        
+        if mostSim > minCacheMatch {
+            return (closestProd, mostSim)
+        }
+        
+        // If no good match was found in the cache, check all products in the catalogue.
+        for prod in self.catalogue.keys {
+            // Force-unwrapping here is acceptable if you are sure every key in the catalogue exists.
+            let shuffled = self.catalogue[prod]!.shuffled()
+            // We randomly sample a subset of the embeddings for efficiency.
+            for i in 0..<max(1, Int(shuffled.count / embeddingSampleSize)) {
+                let sim = abs(cosineSim(A: embedding, B: shuffled[i]))
+                if sim > mostSim {
+                    mostSim = sim
+                    closestProd = prod
+                } else if sim < cutoffThreshold {
+                    break
+                }
+            }
+        }
+        
+        // Add this check to reject poor matches
+        if mostSim < 0.7 {
+            print("poor match \(mostSim)")
+            return ("", mostSim) // Return empty string for no match
+        }
+        
+        return (closestProd, mostSim)
+    }
+    
+    /// Fetch embeddings for a specific product ID from the API
+    /// - Parameters:
+    ///   - productID: The product ID to fetch embeddings for
+    ///   - completion: Callback when the fetch completes
+    func fetchEmbeddings(for productID: String, completion: @escaping (Bool) -> Void) {
+        apiService.fetchEmbeddings(upc: productID) { [weak self] result in
+            guard let self = self else { completion(false); return }
+            
+            switch result {
+            case .success(let embeddings):
+                // Update the local catalogue with the new embeddings
+                for (id, embeddingsArray) in embeddings {
+                    self.catalogue[id] = embeddingsArray
+                }
+                print("Successfully fetched embeddings for \(productID)")
+                completion(true)
+                
+            case .failure(let error):
+                print("Failed to fetch embeddings: \(error.localizedDescription)")
+                completion(false)
+            }
+        }
+    }
+    
+    func addToSeen(prodID: String){
+        self.lruCache.insert(prodID)
+    }
+    
+    /** Cosine similarity **/
+    private func cosineSim(A: [Float], B: [Float]) -> Float {
+        return dot(A: A, B: B) / (magnitude(A: A) * magnitude(A: B))
+    }
+
+    /** Dot Product **/
+    private func dot(A: [Float], B: [Float]) -> Float {
+        var x: Float = 0
+        for i in 0...min(A.count, B.count)-1 {
+            x += A[i] * B[i]
+        }
+        return x
+    }
+
+    /** Vector Magnitude **/
+    private func magnitude(A: [Float]) -> Float {
+        var x: Float = 0
+        for elt in A {
+            x += elt * elt
+        }
+        return sqrt(x)
     }
 }
