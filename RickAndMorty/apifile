@@ -1,37 +1,18 @@
 //
-//  ContentView.swift
-//  API quick-test  (compact UPC key + array-of-arrays)
-//
-//  Output example:
-//  {
-//    "status" : "OK",
-//    "errors" : [],
-//    "1600036245" : [
-//      [ 0.4868, -0.1773, … ],
-//      [ -0.2419, -0.2227, … ]
-//    ]
-//  }
+//  EmbeddingsAPIService.swift
 //
 
-import SwiftUI
+import Foundation
 import zlib
 
-struct ContentView: View {
-    @State private var console = "Fetching…"
-
-    var body: some View {
-        ScrollView {
-            Text(console)
-                .font(.system(.body, design: .monospaced))
-                .padding()
-        }
-        .onAppear { fetch(upc: "1600036245") }          // ← test UPC here
-    }
-
-    // MARK: – Networking
-    private func fetch(upc: String) {
-
-        // 1. build request -------------------------------------------------
+class EmbeddingsAPIService {
+    
+    /// Fetch embeddings for a specific UPC
+    /// - Parameters:
+    ///   - upc: The UPC identifier for the product
+    ///   - completion: Callback with the result containing embeddings or an error
+    func fetchEmbeddings(upc: String, completion: @escaping (Result<[String: [[Float]]], Error>) -> Void) {
+        // 1. build request
         var url = URL(string:
             "https://developer.api.us.stg.walmart.com/api-proxy/service/COMPASS/SERVICE/v4/embeddings/upc"
         )!
@@ -48,62 +29,71 @@ struct ContentView: View {
                                  delegate: InsecureTLSDelegate(),
                                  delegateQueue: nil)
 
-        // 2. run ----------------------------------------------------------
+        // 2. run
         session.dataTask(with: req) { data, _, error in
-            guard error == nil, let data else { log("❌ \(error!.localizedDescription)"); return }
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(NSError(domain: "EmbeddingsAPIService", code: 1, userInfo: [NSLocalizedDescriptionKey: "No data received"])))
+                return
+            }
 
-            // 3. outer JSON ----------------------------------------------
-            guard
-                let outer = try? JSONSerialization.jsonObject(with: data) as? [String:Any],
-                let status  = outer["status"],
-                let errors  = outer["errors"],
-                let b64     = outer["payload"] as? String,
-                let gz      = Data(base64Encoded: b64),
-                let raw     = gz.fullGunzip(),
-                let inner   = try? JSONSerialization.jsonObject(with: raw) as? [String:Any],
-                let rawEmb  = inner[upc]
-            else { log("❌ decode failed"); return }
-
-            // 4. normalise to [[Float]] ----------------------------------
-            var vectors = [[Float]]()
-
-            if let oneVec = rawEmb as? [NSNumber] {                      // single flat
-                vectors = [ oneVec.map { $0.floatValue } ]
-
-            } else if let arrArr = rawEmb as? [[NSNumber]] {             // array of arrays
-                vectors = arrArr.map { $0.map { $0.floatValue } }
-
-            } else if let objArr = rawEmb as? [[String:Any]] {           // [{ id:…, embedding:[…] }, …]
-                for obj in objArr {
-                    if let vecNS = obj["embedding"] as? [NSNumber] {
-                        vectors.append(vecNS.map { $0.floatValue })
+            // 3. outer JSON
+            do {
+                guard
+                    let outer = try JSONSerialization.jsonObject(with: data) as? [String:Any],
+                    let status = outer["status"] as? String,
+                    let b64 = outer["payload"] as? String,
+                    let gz = Data(base64Encoded: b64),
+                    let raw = gz.fullGunzip(),
+                    let inner = try JSONSerialization.jsonObject(with: raw) as? [String:Any]
+                else { 
+                    completion(.failure(NSError(domain: "EmbeddingsAPIService", code: 2, userInfo: [NSLocalizedDescriptionKey: "Decode failed"])))
+                    return
+                }
+                
+                if status != "OK" {
+                    completion(.failure(NSError(domain: "EmbeddingsAPIService", code: 3, userInfo: [NSLocalizedDescriptionKey: "API returned status: \(status)"])))
+                    return
+                }
+                
+                // 4. Process the inner content to extract embeddings
+                var result = [String: [[Float]]]()
+                
+                for (upcKey, rawEmb) in inner {
+                    var vectors = [[Float]]()
+                    
+                    // Handle different possible formats of embeddings
+                    if let oneVec = rawEmb as? [NSNumber] {
+                        vectors = [oneVec.map { $0.floatValue }]
+                    } else if let arrArr = rawEmb as? [[NSNumber]] {
+                        vectors = arrArr.map { $0.map { $0.floatValue } }
+                    } else if let objArr = rawEmb as? [[String:Any]] {
+                        for obj in objArr {
+                            if let vecNS = obj["embedding"] as? [NSNumber] {
+                                vectors.append(vecNS.map { $0.floatValue })
+                            }
+                        }
+                    }
+                    
+                    if !vectors.isEmpty {
+                        result[upcKey] = vectors
                     }
                 }
-            } else {
-                log("❌ unrecognised embeddings format"); return
+                
+                completion(.success(result))
+                
+            } catch {
+                completion(.failure(error))
             }
-
-            // 5. compact JSON -------------------------------------------
-            let compact: [String:Any] = [
-                "status" : status,
-                "errors" : errors,
-                upc      : vectors
-            ]
-            let pretty = try? JSONSerialization.data(withJSONObject: compact, options: .prettyPrinted)
-            if let pretty, let str = String(data: pretty, encoding: .utf8) {
-                log(str)
-            } else {
-                log("❌ couldn’t pretty-print JSON")
-            }
-
         }.resume()
     }
-
-    private func log(_ text: String) { DispatchQueue.main.async { console = text; print(text) } }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// staging-cert helper
+// Helper class for handling insecure TLS for staging
 private final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
     func urlSession(_ s: URLSession, didReceive c: URLAuthenticationChallenge,
                     completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -115,9 +105,8 @@ private final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// tiny GZIP helper
-private extension Data {
+// Tiny GZIP helper
+extension Data {
     func fullGunzip() -> Data? {
         guard !isEmpty else { return self }
         var stream = z_stream()
