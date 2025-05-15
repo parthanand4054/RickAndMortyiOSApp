@@ -1,114 +1,84 @@
 //
-//  InferenceViewModel.swift
+//  HomePageView.swift
 
-// MARK: - FILE DESCRIPTION
-/// This is a wrapper for the ML pipeline
-/// Provides 2 main functions:-
-/// 1) localize function - runs object detection on an image and returns bounding boxes
-/// 2) match function - extracts the embedding for a detection and find the best product match
-
-import Foundation
 import SwiftUI
-import UIKit
 
-///  Wrapper class for ProductEmbedder and EmbeddingMatcher
-class InferenceViewModel: ObservableObject {    
-    /// Handles running inference using the TFLite models
-    private var productEmbedder: ProductEmbedder?
+/// Simple home page to enter the product search and then enter the camera view
+struct HomePageView: View {
+    var inferenceViewModel: InferenceViewModel
+    @State private var searchProductID: String = ""
+    @State private var isLoading = false
+    @State private var showAlert = false
+    @State private var alertMessage = ""
+    @State private var navigateToCamera = false
     
-    /// Handles matching image embeddings to images in a catalogue
-    private var embeddingMatcher: EmbeddingMatcher?
-    
-    // Settings
-    let useCoreML: Bool = true
-    
-    // Models
-    private let objDet: ModelType = ModelType(info: FileInfo("YOLOV8", "tflite"), title: "ObjectDetection")
-    private let smallEmbedder: ModelType = ModelType(info: FileInfo("mobilevit", "tflite"), title: "SmallEmbedder")
-    
-    // State for API requests
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-
-    /// Initializes a wrapper class to handle object localization, image embedding, and embedding matching
-    init() {
-        self.productEmbedder = nil
-        self.embeddingMatcher = EmbeddingMatcher()  // Initialize without JSON file
-        self.makeProductEmbedder(useCoreML: useCoreML)
-    }
-    
-    /// Initializes a product embedder that uses the CoreML delegate
-    func makeProductEmbedder(useCoreML: Bool) {
-        if useCoreML {
-            ProductEmbedder.newCoreMLEmbedder(localizerModelFileInfo: objDet.info, embedderModelFileInfo: smallEmbedder.info) { result in
-                switch result {
-                case .success(let embedder):
-                    self.productEmbedder = embedder
-                case.error(let wrappedError):
-                    print("Failed to initialize: \(wrappedError)")
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 20) {
+                // Search bar on the home page
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                    TextField("Enter product ID...", text: $searchProductID)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .keyboardType(.numberPad) // Since IDs are numeric
                 }
-            }
-        }
-    }
-    
-    /// Returns bounding boxes of objects detected in the input image
-    func localize(uiImage: UIImage) -> [BoundingBox]? {
-        let objectDetResult = productEmbedder?.runObjectLocalization(frame: uiImage)
-        switch objectDetResult {
-        case let .success(objectDetResult):
-            return objectDetResult.boundingBoxes
-        case .error(_):
-            return nil
-        case .none:
-            return nil
-        }
-    }
-    
-    /// Fetches embeddings for a specific product ID
-    /// - Parameters:
-    ///   - productID: The product ID to fetch embeddings for
-    ///   - completion: Callback when fetching completes
-    func fetchEmbeddings(for productID: String, completion: @escaping (Bool) -> Void) {
-        guard let embeddingMatcher = embeddingMatcher else {
-            DispatchQueue.main.async {
-                self.errorMessage = "Embedding matcher not initialized"
-                completion(false)
-            }
-            return
-        }
-        
-        DispatchQueue.main.async {
-            self.isLoading = true
-            self.errorMessage = nil
-        }
-        
-        embeddingMatcher.fetchEmbeddings(for: productID) { success in
-            DispatchQueue.main.async {
-                self.isLoading = false
-                if !success {
-                    self.errorMessage = "Failed to fetch embeddings for \(productID)"
+                .padding()
+                
+                if isLoading {
+                    ProgressView("Fetching embeddings...")
+                        .padding()
                 }
-                completion(success)
+                
+                // Navigation link that activates when we're ready to navigate
+                NavigationLink(
+                    destination: CameraView(inferenceVM: inferenceViewModel, searchProductID: searchProductID)
+                        .navigationBarHidden(true),
+                    isActive: $navigateToCamera
+                ) {
+                    EmptyView()
+                }
+                
+                // Button to search for the product and fetch embeddings
+                Button(action: {
+                    searchForProduct()
+                }) {
+                    Text("Search Product")
+                        .padding()
+                        .foregroundColor(.white)
+                        .background(Color.blue)
+                        .cornerRadius(8)
+                }
+                .disabled(searchProductID.isEmpty || isLoading)
+                .opacity(searchProductID.isEmpty || isLoading ? 0.6 : 1.0)
+                
+            }
+            .navigationTitle("Home")
+            .alert(isPresented: $showAlert) {
+                Alert(
+                    title: Text("Error"),
+                    message: Text(alertMessage),
+                    dismissButton: .default(Text("OK"))
+                )
             }
         }
     }
     
-    /// Returns the product ID of the closest match to the product in the bounding box
-    func match(detection: BoundingBox, from cgImage: CGImage) -> String? {
-        // Embed the image
-        guard let embedding = productEmbedder?.embed(detection: detection, from: UIImage(cgImage: cgImage)) else { return nil}
+    private func searchForProduct() {
+        guard !searchProductID.isEmpty else { return }
         
-        // Match the embedding to a product ID
-        guard let match = self.embeddingMatcher?.getNearestMatch(embedding: embedding) else { return nil }
+        isLoading = true
         
-        // Only consider it a match if there's an actual product ID
-        if match.0.isEmpty {
-            return nil
+        inferenceViewModel.fetchEmbeddings(for: searchProductID) { success in
+            isLoading = false
+            
+            if success {
+                // Navigate to camera view
+                navigateToCamera = true
+            } else {
+                // Show error alert
+                alertMessage = "Could not fetch embeddings for product ID \(searchProductID). Please try again."
+                showAlert = true
+            }
         }
-        
-        // Add the productID to our recently seen cache
-        self.embeddingMatcher?.addToSeen(prodID: match.0)
-        
-        return match.0
     }
 }
