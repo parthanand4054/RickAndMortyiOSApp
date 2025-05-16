@@ -1,84 +1,119 @@
 //
-//  HomePageView.swift
+//  LoginView.swift
+//
 
 import SwiftUI
 
-/// Simple home page to enter the product search and then enter the camera view
-struct HomePageView: View {
-    var inferenceViewModel: InferenceViewModel
-    @State private var searchProductID: String = ""
-    @State private var isLoading = false
+struct LoginView: View {
+    @State private var username: String = ""
+    @State private var password: String = ""
+    @State private var showStoreNumberScreen = false
     @State private var showAlert = false
-    @State private var alertMessage = ""
-    @State private var navigateToCamera = false
+    
+    // Hardcoded credentials
+    private let validUsername = "admin"
+    private let validPassword = "admin"
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 20) {
-                // Search bar on the home page
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                    TextField("Enter product ID...", text: $searchProductID)
-                        .textFieldStyle(RoundedBorderTextFieldStyle())
-                        .keyboardType(.numberPad) // Since IDs are numeric
+            VStack(spacing: 0) {
+                Text("Sign in")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.bottom, 20)
+                    .foregroundColor(.black)
+                
+                ZStack {
+                    Rectangle()
+                        .fill(Color.white)
+                    
+                    VStack(spacing: 30) {
+                        Spacer()
+                            .frame(height: 50)
+                        
+                        Text("Compass Vision")
+                            .font(.largeTitle)
+                            .fontWeight(.bold)
+                            .foregroundColor(.black)
+                        
+                        Spacer()
+                        
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Username")
+                                .foregroundColor(.black)
+                            
+                            TextField("", text: $username)
+                                .padding()
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .stroke(Color.gray, lineWidth: 1)
+                                )
+                                .foregroundColor(.black)
+                            
+                            Text("Password")
+                                .padding(.top, 10)
+                                .foregroundColor(.black)
+                            
+                            SecureField("", text: $password)
+                                .padding()
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .stroke(Color.gray, lineWidth: 1)
+                                )
+                                .foregroundColor(.black)
+                        }
+                        .padding(.horizontal)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            if username == validUsername && password == validPassword {
+                                showStoreNumberScreen = true
+                            } else {
+                                showAlert = true
+                            }
+                        }) {
+                            Text("Continue")
+                                .frame(maxWidth: .infinity)
+                                .padding()
+                                .background(Color(red: 0, green: 0.3, blue: 0.7))
+                                .foregroundColor(.white)
+                                .cornerRadius(25)
+                                .padding(.horizontal)
+                        }
+                        
+                        Spacer()
+                    }
                 }
+                .cornerRadius(10)
                 .padding()
                 
-                if isLoading {
-                    ProgressView("Fetching embeddings...")
-                        .padding()
-                }
-                
-                // Navigation link that activates when we're ready to navigate
-                NavigationLink(
-                    destination: CameraView(inferenceVM: inferenceViewModel, searchProductID: searchProductID)
-                        .navigationBarHidden(true),
-                    isActive: $navigateToCamera
-                ) {
-                    EmptyView()
-                }
-                
-                // Button to search for the product and fetch embeddings
-                Button(action: {
-                    searchForProduct()
-                }) {
-                    Text("Search Product")
-                        .padding()
-                        .foregroundColor(.white)
-                        .background(Color.blue)
-                        .cornerRadius(8)
-                }
-                .disabled(searchProductID.isEmpty || isLoading)
-                .opacity(searchProductID.isEmpty || isLoading ? 0.6 : 1.0)
-                
+                Spacer()
             }
-            .navigationTitle("Home")
+            .background(Color(white: 0.9))
+            .edgesIgnoringSafeArea(.bottom)
             .alert(isPresented: $showAlert) {
                 Alert(
-                    title: Text("Error"),
-                    message: Text(alertMessage),
+                    title: Text("Invalid Credentials"),
+                    message: Text("Please check your username and password."),
                     dismissButton: .default(Text("OK"))
                 )
             }
+            .navigationBarHidden(true)
+            .background(
+                NavigationLink(
+                    destination: StoreNumberView(),
+                    isActive: $showStoreNumberScreen,
+                    label: { EmptyView() }
+                )
+            )
         }
+        .navigationViewStyle(StackNavigationViewStyle())
     }
-    
-    private func searchForProduct() {
-        guard !searchProductID.isEmpty else { return }
-        
-        isLoading = true
-        
-        inferenceViewModel.fetchEmbeddings(for: searchProductID) { success in
-            isLoading = false
-            
-            if success {
-                // Navigate to camera view
-                navigateToCamera = true
-            } else {
-                // Show error alert
-                alertMessage = "Could not fetch embeddings for product ID \(searchProductID). Please try again."
-                showAlert = true
-            }
-        }
+}
+
+struct LoginView_Previews: PreviewProvider {
+    static var previews: some View {
+        LoginView()
     }
 }
