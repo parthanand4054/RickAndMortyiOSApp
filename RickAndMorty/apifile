@@ -1,98 +1,96 @@
 //
-//  LoginView.swift
+//  StoreNumberView.swift
 
 import SwiftUI
 
-struct LoginView: View {
-    @State private var username: String = ""
-    @State private var password: String = ""
-    @State private var showStoreNumberView = false
+struct StoreNumberView: View {
+    @Environment(\.presentationMode) var presentationMode // To handle custom back navigation
+    @State private var storeNumber: String = ""
+    @State private var showHomeView = false
     @State private var showAlert = false
+    @FocusState private var isInputFocused: Bool
     
-    // Hardcoded credentials
-    private let validUsername = "admin"
-    private let validPassword = "admin"
+    // Hardcoded valid store numbers
+    private let validStoreNumbers = ["100", "200"]
     
     var body: some View {
-        NavigationView {
-            ZStack {
-                // Background color to match screenshot
-                Color(white: 0.95)
-                    .ignoresSafeArea()
+        ZStack {
+            // Background color to match screenshot
+            Color(white: 0.95)
+                .ignoresSafeArea()
+            
+            VStack(spacing: 30) {
+                Spacer()
                 
-                VStack(spacing: 30) {
-                    Spacer()
+                // App title
+                Text("Compass Vision")
+                    .font(.system(size: 28, weight: .bold))
+                    .padding(.bottom, 40)
+                
+                // Store number field
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Store Number")
+                        .font(.system(size: 16))
                     
-                    // App title
-                    Text("Compass Vision")
-                        .font(.system(size: 28, weight: .bold))
-                        .padding(.bottom, 40)
-                    
-                    // Username field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Username")
-                            .font(.system(size: 16))
-                        
-                        TextField("", text: $username)
-                            .padding()
-                            .frame(height: 56)
-                            .background(Color.white)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .stroke(Color.black, lineWidth: 1)
-                            )
-                    }
-                    
-                    // Password field
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Password")
-                            .font(.system(size: 16))
-                        
-                        SecureField("", text: $password)
-                            .padding()
-                            .frame(height: 56)
-                            .background(Color.white)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .stroke(Color.black, lineWidth: 1)
-                            )
-                    }
-                    
-                    // Continue button
-                    Button(action: {
-                        if username == validUsername && password == validPassword {
-                            showStoreNumberView = true
-                        } else {
-                            showAlert = true
-                        }
-                    }) {
-                        Text("Continue")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 56)
-                            .background(Color(red: 0.08, green: 0.18, blue: 0.56))
-                            .cornerRadius(28)
-                    }
-                    
-                    Spacer()
-                    
-                    // Navigation link to store number view (hidden)
-                    NavigationLink(destination: StoreNumberView().navigationBarHidden(true), isActive: $showStoreNumberView) {
-                        EmptyView()
-                    }
+                    TextField("", text: $storeNumber)
+                        .keyboardType(.numberPad)
+                        .padding()
+                        .frame(height: 56)
+                        .background(Color.white)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.black, lineWidth: 1)
+                        )
+                        .focused($isInputFocused)
                 }
-                .padding(.horizontal, 30)
+                
+                // Submit button
+                Button(action: {
+                    if validStoreNumbers.contains(storeNumber) {
+                        showHomeView = true
+                    } else {
+                        showAlert = true
+                    }
+                }) {
+                    Text("Submit")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 56)
+                        .background(Color(red: 0.08, green: 0.18, blue: 0.56))
+                        .cornerRadius(28)
+                }
+                
+                Spacer()
+                
+                // Navigation to HomePageView (hidden)
+                NavigationLink(destination: HomePageView(inferenceViewModel: InferenceViewModel())
+                    .navigationBarHidden(true), isActive: $showHomeView) {
+                    EmptyView()
+                }
             }
-            .navigationBarHidden(true) // Hide the navigation bar
-            .alert(isPresented: $showAlert) {
-                Alert(
-                    title: Text("Error"),
-                    message: Text("Invalid username or password"),
-                    dismissButton: .default(Text("OK"))
-                )
+            .padding(.horizontal, 30)
+            .onTapGesture {
+                // Dismiss keyboard when tapping outside
+                isInputFocused = false
             }
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .navigationBarHidden(true) // Hide the navigation bar
+        .alert(isPresented: $showAlert) {
+            Alert(
+                title: Text("Error"),
+                message: Text("Invalid store number"),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        // Add a toolbar with a Done button to dismiss the numeric keyboard
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done") {
+                    isInputFocused = false
+                }
+            }
+        }
     }
 }
