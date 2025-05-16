@@ -1,119 +1,112 @@
 //
-//  LoginView.swift
+//  StoreNumberView.swift
 //
 
 import SwiftUI
 
-struct LoginView: View {
-    @State private var username: String = ""
-    @State private var password: String = ""
-    @State private var showStoreNumberScreen = false
+struct StoreNumberView: View {
+    @State private var storeNumber: String = ""
+    @State private var showHomeScreen = false
     @State private var showAlert = false
     
-    // Hardcoded credentials
-    private let validUsername = "admin"
-    private let validPassword = "admin"
+    // Valid store numbers
+    private let validStoreNumbers = ["100", "200"]
     
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                Text("Sign in")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal)
-                    .padding(.bottom, 20)
-                    .foregroundColor(.black)
+        VStack(spacing: 0) {
+            Text("Enter store number")
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.bottom, 20)
+                .foregroundColor(.black)
+            
+            ZStack {
+                Rectangle()
+                    .fill(Color.white)
                 
-                ZStack {
-                    Rectangle()
-                        .fill(Color.white)
+                VStack(spacing: 30) {
+                    Spacer()
+                        .frame(height: 50)
                     
-                    VStack(spacing: 30) {
-                        Spacer()
-                            .frame(height: 50)
-                        
-                        Text("Compass Vision")
-                            .font(.largeTitle)
-                            .fontWeight(.bold)
+                    Text("Compass Vision")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                        .foregroundColor(.black)
+                    
+                    Spacer()
+                    
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Store Number")
                             .foregroundColor(.black)
                         
-                        Spacer()
-                        
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("Username")
-                                .foregroundColor(.black)
-                            
-                            TextField("", text: $username)
-                                .padding()
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .stroke(Color.gray, lineWidth: 1)
-                                )
-                                .foregroundColor(.black)
-                            
-                            Text("Password")
-                                .padding(.top, 10)
-                                .foregroundColor(.black)
-                            
-                            SecureField("", text: $password)
-                                .padding()
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .stroke(Color.gray, lineWidth: 1)
-                                )
-                                .foregroundColor(.black)
-                        }
-                        .padding(.horizontal)
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            if username == validUsername && password == validPassword {
-                                showStoreNumberScreen = true
-                            } else {
-                                showAlert = true
-                            }
-                        }) {
-                            Text("Continue")
-                                .frame(maxWidth: .infinity)
-                                .padding()
-                                .background(Color(red: 0, green: 0.3, blue: 0.7))
-                                .foregroundColor(.white)
-                                .cornerRadius(25)
-                                .padding(.horizontal)
-                        }
-                        
-                        Spacer()
+                        TextField("", text: $storeNumber)
+                            .padding()
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .stroke(Color.gray, lineWidth: 1)
+                            )
+                            .keyboardType(.numberPad)
+                            .foregroundColor(.black)
                     }
+                    .padding(.horizontal)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        if validStoreNumbers.contains(storeNumber) {
+                            showHomeScreen = true
+                        } else {
+                            showAlert = true
+                        }
+                    }) {
+                        Text("Submit")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color(red: 0, green: 0.3, blue: 0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(25)
+                            .padding(.horizontal)
+                    }
+                    
+                    Spacer()
                 }
-                .cornerRadius(10)
-                .padding()
-                
-                Spacer()
             }
-            .background(Color(white: 0.9))
-            .edgesIgnoringSafeArea(.bottom)
-            .alert(isPresented: $showAlert) {
-                Alert(
-                    title: Text("Invalid Credentials"),
-                    message: Text("Please check your username and password."),
-                    dismissButton: .default(Text("OK"))
-                )
-            }
-            .navigationBarHidden(true)
-            .background(
-                NavigationLink(
-                    destination: StoreNumberView(),
-                    isActive: $showStoreNumberScreen,
-                    label: { EmptyView() }
-                )
+            .cornerRadius(10)
+            .padding()
+            
+            Spacer()
+        }
+        .background(Color(white: 0.9))
+        .edgesIgnoringSafeArea(.bottom)
+        .navigationBarHidden(true)
+        .alert(isPresented: $showAlert) {
+            Alert(
+                title: Text("Invalid Store Number"),
+                message: Text("Please enter a valid store number."),
+                dismissButton: .default(Text("OK"))
             )
         }
-        .navigationViewStyle(StackNavigationViewStyle())
+        .background(
+            NavigationLink(
+                destination: HomePageViewWrapper(inferenceViewModel: InferenceViewModel()),
+                isActive: $showHomeScreen,
+                label: { EmptyView() }
+            )
+        )
     }
 }
 
-struct LoginView_Previews: PreviewProvider {
+struct HomePageViewWrapper: View {
+    var inferenceViewModel: InferenceViewModel
+    
+    var body: some View {
+        HomePageView(inferenceViewModel: inferenceViewModel)
+            .navigationBarHidden(true)
+    }
+}
+
+struct StoreNumberView_Previews: PreviewProvider {
     static var previews: some View {
-        LoginView()
+        StoreNumberView()
     }
 }
