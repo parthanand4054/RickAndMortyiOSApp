@@ -1,113 +1,98 @@
+//
+//  LoginView.swift
 
-// LoginView.swift
 import SwiftUI
 
 struct LoginView: View {
-    @State private var username = ""
-    @State private var password = ""
-    var onLoginSuccess: () -> Void
-
+    @State private var username: String = ""
+    @State private var password: String = ""
+    @State private var showStoreNumberView = false
+    @State private var showAlert = false
+    
+    // Hardcoded credentials
+    private let validUsername = "admin"
+    private let validPassword = "admin"
+    
     var body: some View {
-        VStack(spacing: 32) {
-            HStack {
-                Text("Sign in")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal)
-
-            Spacer()
-
-            Text("Compass Vision")
-                .font(.largeTitle)
-                .bold()
-
-            Spacer()
-
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Username")
-                    .font(.caption)
-                TextField("", text: $username)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-
-                Text("Password")
-                    .font(.caption)
-                SecureField("", text: $password)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-            }
-            .padding(.horizontal)
-
-            Button(action: {
-                if username == "admin" && password == "admin" {
-                    onLoginSuccess()
+        NavigationView {
+            ZStack {
+                // Background color to match screenshot
+                Color(white: 0.95)
+                    .ignoresSafeArea()
+                
+                VStack(spacing: 30) {
+                    Spacer()
+                    
+                    // App title
+                    Text("Compass Vision")
+                        .font(.system(size: 28, weight: .bold))
+                        .padding(.bottom, 40)
+                    
+                    // Username field
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Username")
+                            .font(.system(size: 16))
+                        
+                        TextField("", text: $username)
+                            .padding()
+                            .frame(height: 56)
+                            .background(Color.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Color.black, lineWidth: 1)
+                            )
+                    }
+                    
+                    // Password field
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Password")
+                            .font(.system(size: 16))
+                        
+                        SecureField("", text: $password)
+                            .padding()
+                            .frame(height: 56)
+                            .background(Color.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Color.black, lineWidth: 1)
+                            )
+                    }
+                    
+                    // Continue button
+                    Button(action: {
+                        if username == validUsername && password == validPassword {
+                            showStoreNumberView = true
+                        } else {
+                            showAlert = true
+                        }
+                    }) {
+                        Text("Continue")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 56)
+                            .background(Color(red: 0.08, green: 0.18, blue: 0.56))
+                            .cornerRadius(28)
+                    }
+                    
+                    Spacer()
+                    
+                    // Navigation link to store number view (hidden)
+                    NavigationLink(destination: StoreNumberView(), isActive: $showStoreNumberView) {
+                        EmptyView()
+                    }
                 }
-            }) {
-                Text("Continue")
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(25)
+                .padding(.horizontal, 30)
             }
-            .padding(.horizontal)
-
-            Spacer()
-        }
-    }
-}
-
-
-// StoreNumberView.swift
-import SwiftUI
-
-struct StoreNumberView: View {
-    @State private var storeInput = ""
-    var onStoreSelected: (Int) -> Void
-
-    // Hardcoded valid store numbers
-    private let validStores = [100, 200]
-
-    var body: some View {
-        VStack(spacing: 32) {
-            HStack {
-                Text("Enter store number")
-                    .font(.headline)
-                Spacer()
+            .navigationTitle("Sign in")
+            .navigationBarTitleDisplayMode(.inline)
+            .alert(isPresented: $showAlert) {
+                Alert(
+                    title: Text("Error"),
+                    message: Text("Invalid username or password"),
+                    dismissButton: .default(Text("OK"))
+                )
             }
-            .padding(.horizontal)
-
-            Spacer()
-
-            Text("Compass Vision")
-                .font(.largeTitle)
-                .bold()
-
-            Spacer()
-
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Store Number")
-                    .font(.caption)
-                TextField("", text: $storeInput)
-                    .keyboardType(.numberPad)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-            }
-            .padding(.horizontal)
-
-            Button(action: {
-                if let num = Int(storeInput), validStores.contains(num) {
-                    onStoreSelected(num)
-                }
-            }) {
-                Text("Submit")
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(25)
-            }
-            .padding(.horizontal)
-
-            Spacer()
         }
     }
 }
