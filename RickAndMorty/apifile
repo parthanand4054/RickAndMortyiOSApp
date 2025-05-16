@@ -1,112 +1,113 @@
-//
-//  StoreNumberView.swift
-//
 
+// LoginView.swift
+import SwiftUI
+
+struct LoginView: View {
+    @State private var username = ""
+    @State private var password = ""
+    var onLoginSuccess: () -> Void
+
+    var body: some View {
+        VStack(spacing: 32) {
+            HStack {
+                Text("Sign in")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding(.horizontal)
+
+            Spacer()
+
+            Text("Compass Vision")
+                .font(.largeTitle)
+                .bold()
+
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Username")
+                    .font(.caption)
+                TextField("", text: $username)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+
+                Text("Password")
+                    .font(.caption)
+                SecureField("", text: $password)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+            .padding(.horizontal)
+
+            Button(action: {
+                if username == "admin" && password == "admin" {
+                    onLoginSuccess()
+                }
+            }) {
+                Text("Continue")
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(25)
+            }
+            .padding(.horizontal)
+
+            Spacer()
+        }
+    }
+}
+
+
+// StoreNumberView.swift
 import SwiftUI
 
 struct StoreNumberView: View {
-    @State private var storeNumber: String = ""
-    @State private var showHomeScreen = false
-    @State private var showAlert = false
-    
-    // Valid store numbers
-    private let validStoreNumbers = ["100", "200"]
-    
+    @State private var storeInput = ""
+    var onStoreSelected: (Int) -> Void
+
+    // Hardcoded valid store numbers
+    private let validStores = [100, 200]
+
     var body: some View {
-        VStack(spacing: 0) {
-            Text("Enter store number")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-                .padding(.bottom, 20)
-                .foregroundColor(.black)
-            
-            ZStack {
-                Rectangle()
-                    .fill(Color.white)
-                
-                VStack(spacing: 30) {
-                    Spacer()
-                        .frame(height: 50)
-                    
-                    Text("Compass Vision")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                        .foregroundColor(.black)
-                    
-                    Spacer()
-                    
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Store Number")
-                            .foregroundColor(.black)
-                        
-                        TextField("", text: $storeNumber)
-                            .padding()
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .stroke(Color.gray, lineWidth: 1)
-                            )
-                            .keyboardType(.numberPad)
-                            .foregroundColor(.black)
-                    }
-                    .padding(.horizontal)
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        if validStoreNumbers.contains(storeNumber) {
-                            showHomeScreen = true
-                        } else {
-                            showAlert = true
-                        }
-                    }) {
-                        Text("Submit")
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color(red: 0, green: 0.3, blue: 0.7))
-                            .foregroundColor(.white)
-                            .cornerRadius(25)
-                            .padding(.horizontal)
-                    }
-                    
-                    Spacer()
-                }
+        VStack(spacing: 32) {
+            HStack {
+                Text("Enter store number")
+                    .font(.headline)
+                Spacer()
             }
-            .cornerRadius(10)
-            .padding()
-            
+            .padding(.horizontal)
+
+            Spacer()
+
+            Text("Compass Vision")
+                .font(.largeTitle)
+                .bold()
+
+            Spacer()
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Store Number")
+                    .font(.caption)
+                TextField("", text: $storeInput)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+            }
+            .padding(.horizontal)
+
+            Button(action: {
+                if let num = Int(storeInput), validStores.contains(num) {
+                    onStoreSelected(num)
+                }
+            }) {
+                Text("Submit")
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(Color.blue)
+                    .foregroundColor(.white)
+                    .cornerRadius(25)
+            }
+            .padding(.horizontal)
+
             Spacer()
         }
-        .background(Color(white: 0.9))
-        .edgesIgnoringSafeArea(.bottom)
-        .navigationBarHidden(true)
-        .alert(isPresented: $showAlert) {
-            Alert(
-                title: Text("Invalid Store Number"),
-                message: Text("Please enter a valid store number."),
-                dismissButton: .default(Text("OK"))
-            )
-        }
-        .background(
-            NavigationLink(
-                destination: HomePageViewWrapper(inferenceViewModel: InferenceViewModel()),
-                isActive: $showHomeScreen,
-                label: { EmptyView() }
-            )
-        )
-    }
-}
-
-struct HomePageViewWrapper: View {
-    var inferenceViewModel: InferenceViewModel
-    
-    var body: some View {
-        HomePageView(inferenceViewModel: inferenceViewModel)
-            .navigationBarHidden(true)
-    }
-}
-
-struct StoreNumberView_Previews: PreviewProvider {
-    static var previews: some View {
-        StoreNumberView()
     }
 }
