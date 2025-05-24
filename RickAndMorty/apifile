@@ -1,47 +1,50 @@
-/// Parse the output from the detection model and return a list of bounding boxes
-///
-/// This method handles all data post-processing
-///
-/// - Parameter outputTensor: The output tensor after invoking with input
-/// - Returns: list of bounding boxes stored in Prediction data type
-private func parseDetectionModelOutput(from outputTensor: Tensor) -> [BoundingBox] {
+import SwiftUI
+import UniformTypeIdentifiers
+
+struct TestView: View {
+    let fn = "log.zip"
     
-    // Convert the bytes from the output tensor to a list of Float32
-    let outputSize = outputTensor.shape.dimensions.reduce(1, {x, y in x * y})
-    let outputData = UnsafeMutableBufferPointer<Float32>.allocate(capacity: outputSize)
-    var _ = outputTensor.data.copyBytes(to: outputData)
-    
-    var detections: [BoundingBox] = []
-    
-    // 6x1344 dimensional output (6 rows of size 1344)
-    // Output describes bounding box location, dimension and confidence score
-    // Note that bounding box information is relative to resized input image
-    for i in (0..<1344) {
-        // Get raw float values
-        let xmFloat = outputData[i]
-        let ymFloat = outputData[i + 1344]
-        let wFloat = outputData[i + 1344 * 2]
-        let hFloat = outputData[i + 1344 * 3]
-        let conf = outputData[i + 1344 * 5] // confidence of detection
-        
-        // Only keep detections with high confidence scores
-        if conf > detectionConfidenceThreshold {
-            // Clamp values to reasonable ranges and convert to Int safely
-            let xm = Int(max(0, min(Float(Int.max), xmFloat)))
-            let ym = Int(max(0, min(Float(Int.max), ymFloat)))
-            let w = Int(max(0, min(Float(Int.max), wFloat)))
-            let h = Int(max(0, min(Float(Int.max), hFloat)))
+    var body: some View {
+        VStack {
+            Text("test")
+                .font(.title)
+                .padding()
             
-            // Additional validation to ensure reasonable bounding box dimensions
-            guard w > 0 && h > 0 && w < 10000 && h < 10000 else {
-                continue // Skip invalid detections
+            Button(action: {
+                testfn()
+            }) {
+                HStack {
+                    Text("test \(fn)")
+                }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
             }
-            
-            // Assign ID so we can map embeddings -> Bounding Boxes
-            let bounding_box = BoundingBox(rect: CGRect(x: xm, y: ym, width: w, height: h), conf: conf, id: detections.count+1)
-            detections.append(bounding_box)
         }
     }
     
-    return detections
+    func testfn() {
+        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
+                                              withExtension: "zip") else {
+            print("error")
+            return
+        }
+        
+        let activityViewController = UIActivityViewController(
+            activityItems: [fur],
+            applicationActivities: nil
+        )
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootViewController = windowScene.windows.first?.rootViewController {
+            rootViewController.present(activityViewController, animated: true, completion: nil)
+        }
+    }
+}
+
+struct ContentView: View {
+    var body: some View {
+        TestView()
+    }
 }
