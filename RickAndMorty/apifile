@@ -1,109 +1,55 @@
-//
-//  StoreNumberView.swift
-//  ShelfScanDemo
-//
-
-import SwiftUI
-
-struct StoreNumberView: View {
-    @Environment(\.presentationMode) var presentationMode
-    @State private var storeNumber: String = ""
-    @State private var showHomeView = false
-    @State private var showAlert: Bool = false
-    @FocusState private var isInputFocused: Bool
-    @EnvironmentObject var tokenViewModel: TokenViewModel
+/// Parse the output from the detection model and return a list of bounding boxes
+private func parseDetectionModelOutput(from outputTensor: Tensor) -> [BoundingBox] {
     
-    // Hardcoded valid store numbers
-    private let validStoreNumbers = ["100", "200"]
+    let outputSize = outputTensor.shape.dimensions.reduce(1, {x, y in x * y})
+    let outputData = UnsafeMutableBufferPointer<Float32>.allocate(capacity: outputSize)
+    defer { outputData.deallocate() }
+    var _ = outputTensor.data.copyBytes(to: outputData)
     
-    var body: some View {
-        ZStack {
-            Color(white: 1)
-                .ignoresSafeArea()
-            
-            VStack(spacing: 20) {
-                // App title
-                Text("Compass Vision")
-                    .font(.system(size: 34, weight: .semibold))
-                    .foregroundColor(.black)
-                    .padding(.bottom, 100)
-                
-                // Store number field
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Store Number")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.black)
-                    
-                    TextField("", text: $storeNumber)
-                        .foregroundColor(.black)
-                        .keyboardType(.numberPad)
-                        .padding()
-                        .frame(height: 56)
-                        .background(Color.white)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.gray, lineWidth: 0.7)
-                        )
-                        .focused($isInputFocused)
-                }
-                
-                // Submit button
-                Button(action: {
-                    if validStoreNumbers.contains(storeNumber) {
-                        showHomeView = true
-                    } else {
-                        showAlert = true
-                    }
-                }) {
-                    Text("Submit")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .background(Color(red: 0/255, green: 113/255, blue: 220/255))
-                        .cornerRadius(28)
-                }
-                
-                Spacer()
-                
-                // Navigation to HomePageView (hidden)
-                NavigationLink(
-                    destination: HomePageView(inferenceViewModel: InferenceViewModel())
-                        .environmentObject(tokenViewModel)
-                        .navigationBarHidden(true),
-                    isActive: $showHomeView
-                ) {
-                    EmptyView()
-                }
-                
-                // Toolbar with Done button
-                if isInputFocused {
-                    HStack {
-                        Spacer()
-                        Button("Done") {
-                            isInputFocused = false
-                        }
-                        .padding()
-                    }
-                    .background(Color(UIColor.systemGroupedBackground))
-                }
-            }
-            .padding(.horizontal, 20)
-            .navigationBarHidden(true)
-            .alert(isPresented: $showAlert) {
-                Alert(
-                    title: Text("Error"),
-                    message: Text("Invalid store number"),
-                    dismissButton: .default(Text("OK"))
-                )
-            }
+    var detections: [BoundingBox] = []
+    
+    // Define reasonable bounds for coordinates (based on typical image sizes)
+    let maxCoordinate: Float32 = 2000.0  // Reasonable upper bound
+    let minCoordinate: Float32 = -100.0  // Allow some negative values
+    let maxDimension: Float32 = 1000.0   // Maximum width/height
+    
+    for i in (0..<1344) {
+        let conf = outputData[i + 1344 * 5]
+        
+        // Only process high-confidence detections
+        guard conf > detectionConfidenceThreshold else { continue }
+        
+        // Get raw float values
+        let xmFloat = outputData[i]
+        let ymFloat = outputData[i + 1344]
+        let wFloat = outputData[i + 1344 * 2]
+        let hFloat = outputData[i + 1344 * 3]
+        
+        // Check if values are reasonable before conversion
+        guard xmFloat.isFinite && ymFloat.isFinite && wFloat.isFinite && hFloat.isFinite else {
+            print("Skipping detection with non-finite values")
+            continue
         }
+        
+        // Check if values are within reasonable bounds
+        guard xmFloat >= minCoordinate && xmFloat <= maxCoordinate &&
+              ymFloat >= minCoordinate && ymFloat <= maxCoordinate &&
+              wFloat > 0 && wFloat <= maxDimension &&
+              hFloat > 0 && hFloat <= maxDimension else {
+            print("Skipping detection with unreasonable values: x=\(xmFloat), y=\(ymFloat), w=\(wFloat), h=\(hFloat)")
+            continue
+        }
+        
+        // Now safe to convert to Int
+        let xm = Int(xmFloat)
+        let ym = Int(ymFloat)
+        let w = Int(wFloat)
+        let h = Int(hFloat)
+        
+        let bounding_box = BoundingBox(rect: CGRect(x: xm, y: ym, width: w, height: h), conf: conf, id: detections.count + 1)
+        detections.append(bounding_box)
     }
-}
-
-struct StoreNumberView_Previews: PreviewProvider {
-    static var previews: some View {
-        StoreNumberView()
-            .environmentObject(TokenViewModel(networkService: NetworkService(keychainService: KeychainService.standard)))
-    }
+    
+    print("Parsed \(detections.count) valid detections out of potential high-confidence detections")
+    return detections
 }
