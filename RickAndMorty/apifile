@@ -1,154 +1,120 @@
-func localize(pixelBuffer: CVPixelBuffer) {
-    guard let image = CGImage.create(from: pixelBuffer) else { return }
-    let uiImage = UIImage(cgImage: image)
+//
+//  LoginView.swift
+//  ShelfScanDemo
+//
+
+import SwiftUI
+
+struct LoginView: View {
+    @State private var username: String = ""
+    @State private var password: String = ""
+    @State private var showStoreNumberView = false
+    @State private var showAlert: Bool = false
+    @EnvironmentObject var tokenViewModel: TokenViewModel
     
-    // Run object detection to get new bounding box predictions
-    let predictions = self.inferenceVM.localize(uiImage: uiImage)
+    // Hardcoded credentials
+    private let validUsername = "admin"
+    private let validPassword = "admin"
     
-    // Switching to the main thread
-    DispatchQueue.main.async {
-        var newPredictions = predictions ?? []
-        
-        // Detect significant motion
-        let motionDetected = self.detectSignificantMotion(newBoxes: newPredictions)
-        
-        if motionDetected {
-            // Clear all product IDs on significant motion
-            for i in 0..<newPredictions.count {
-                newPredictions[i].prodID = nil
-            }
-            print("Motion detected - clearing all product IDs")
-        } else {
-            // Only apply sticky labels if no significant motion
-            if let oldBoxes = self.boundingBoxes {
-                for i in 0..<newPredictions.count {
-                    let newBox = newPredictions[i]
-                    let newCenter = CGPoint(x: newBox.rect.midX, y: newBox.rect.midY)
+    var body: some View {
+        NavigationView {
+            ZStack {
+                // Background color to match screenshot
+                Color(white: 1)
+                    .ignoresSafeArea()
+                
+                VStack(spacing: 20) {
+                    // App title
+                    Text("Compass Vision")
+                        .font(.system(size: 34, weight: .semibold))
+                        .foregroundColor(.black)
+                        .padding(.vertical, 100)
                     
-                    // Find the closest old box
-                    var closestOldBox: BoundingBox?
-                    var minDistance: CGFloat = CGFloat.greatestFiniteMagnitude
+                    textFieldsAndButton
                     
-                    for oldBox in oldBoxes {
-                        let oldCenter = CGPoint(x: oldBox.rect.midX, y: oldBox.rect.midY)
-                        let distance = hypot(newCenter.x - oldCenter.x, newCenter.y - oldCenter.y)
-                        
-                        if distance < minDistance {
-                            minDistance = distance
-                            closestOldBox = oldBox
-                        }
+                    Spacer()
+                    
+                    // Navigation to StoreNumberView (hidden)
+                    NavigationLink(destination: StoreNumberView(), isActive: $showStoreNumberView) {
+                        EmptyView()
                     }
-                    
-                    // Only transfer product ID if:
-                    // 1. Distance is within threshold
-                    // 2. The old box had a product ID
-                    // REMOVED: Size similarity check
-                    if let oldBox = closestOldBox,
-                       minDistance < 20,
-                       let prodID = oldBox.prodID {
-                        newPredictions[i].prodID = prodID
-                    }
+                }
+                .navigationBarHidden(true)
+                .alert(isPresented: $showAlert) {
+                    Alert(
+                        title: Text("Error"),
+                        message: Text("Invalid username or password"),
+                        dismissButton: .default(Text("OK"))
+                    )
                 }
             }
         }
-        
-        self.frame = image
-        self.boundingBoxes = newPredictions
-        self.frameCounter += 1
-        
-        // Run embedding matching more frequently after motion or every nth frame
-        if motionDetected || self.frameCounter % self.matchingFrameInterval == 0 {
-            self.runMatchingOnBoundingBoxes(for: image)
+    }
+    
+    var textFieldsAndButton: some View {
+        VStack(spacing: 20) {
+            // Username field
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Username")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.black)
+                
+                TextField("", text: $username)
+                    .foregroundColor(.black)
+                    .padding()
+                    .frame(height: 56)
+                    .background(Color.white)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.gray, lineWidth: 0.7)
+                    )
+            }
+            
+            // Password field
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Password")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.black)
+                
+                SecureField("", text: $password)
+                    .foregroundColor(.black)
+                    .padding()
+                    .frame(height: 56)
+                    .background(Color.white)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.gray, lineWidth: 0.7)
+                    )
+            }
+            
+            // Continue button
+            Button(action: {
+                if username == validUsername && password == validPassword {
+                    showStoreNumberView = true
+                } else {
+                    showAlert = true
+                }
+            }) {
+                Text("Continue")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(Color(red: 0/255, green: 113/255, blue: 220/255))
+                    .cornerRadius(28)
+            }
+        }
+        .padding(.horizontal, 20)
+        .onTapGesture {
+            // Dismiss keyboard when tapping outside
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-// Detect significant camera motion based on box positions
-private func detectSignificantMotion(newBoxes: [BoundingBox]) -> Bool {
-    let currentPositions = newBoxes.map { CGPoint(x: $0.rect.midX, y: $0.rect.midY) }
-    
-    // If we don't have previous positions, store current and return false
-    guard !lastBoxPositions.isEmpty else {
-        lastBoxPositions = currentPositions
-        return false
-    }
-    
-    // Calculate average displacement
-    var totalDisplacement: CGFloat = 0
-    let comparableCount = min(currentPositions.count, lastBoxPositions.count)
-    
-    if comparableCount > 0 {
-        for i in 0..<comparableCount {
-            let displacement = hypot(
-                currentPositions[i].x - lastBoxPositions[i].x,
-                currentPositions[i].y - lastBoxPositions[i].y
-            )
-            totalDisplacement += displacement
-        }
-        
-        let averageDisplacement = totalDisplacement / CGFloat(comparableCount)
-        let normalizedDisplacement = averageDisplacement / modelDimensions.width
-        
-        // Store current positions for next frame
-        lastBoxPositions = currentPositions
-        
-        // If average displacement exceeds threshold, motion detected
-        if normalizedDisplacement > significantMotionThreshold {
-            return true
-        }
-    }
-    
-    // Also check if number of boxes changed significantly
-    let countDifference = abs(currentPositions.count - lastBoxPositions.count)
-    if countDifference > 3 {
-        lastBoxPositions = currentPositions
-        return true
-    }
-    
-    return false
-}
-
-
-
-
-
-
-
-
-
-func runMatchingOnBoundingBoxes(for frame: CGImage) {
-    guard let boxes = self.boundingBoxes, !boxes.isEmpty else { return }
-    var updatedBoxes = boxes
-    let group = DispatchGroup()
-    let lock = DispatchQueue(label: "org.walmart.boundingBoxLock")
-    
-    for index in boxes.indices {
-        // Only match boxes that don't have a product ID yet
-        if updatedBoxes[index].prodID == nil {
-            group.enter()
-            DispatchQueue.global().async {
-                let matchedProductID = self.inferenceVM.match(detection: boxes[index], from: frame)
-                if let match = matchedProductID {
-                    lock.sync {
-                        updatedBoxes[index].prodID = match
-                    }
-                }
-                group.leave()
-            }
-        }
-    }
-    
-    group.notify(queue: DispatchQueue.main) {
-        self.boundingBoxes = updatedBoxes
+struct LoginView_Previews: PreviewProvider {
+    static var previews: some View {
+        LoginView()
+            .environmentObject(TokenViewModel(networkService: NetworkService(keychainService: KeychainService.standard)))
     }
 }
