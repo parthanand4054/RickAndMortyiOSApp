@@ -1,62 +1,46 @@
 /// Parse the output from the detection model and return a list of bounding boxes
+///
+/// This method handles all data post-processing
+///
+/// - Parameter outputTensor: The output tensor after invoking with input
+/// - Returns: list of bounding boxes stored in Prediction data type
 private func parseDetectionModelOutput(from outputTensor: Tensor) -> [BoundingBox] {
-    
+
+    // Convert the bytes from the output tensor to a list of Float32
     let outputSize = outputTensor.shape.dimensions.reduce(1, {x, y in x * y})
     let outputData = UnsafeMutableBufferPointer<Float32>.allocate(capacity: outputSize)
-    defer { outputData.deallocate() }
     var _ = outputTensor.data.copyBytes(to: outputData)
-    
+
     var detections: [BoundingBox] = []
-    
-    // More lenient bounds - based on your model's expected input size (256x256)
-    // Allow coordinates to be outside image bounds for partially visible objects
-    let maxSafeFloat: Float32 = Float32(Int.max / 1000) // Much safer conversion limit
-    let minSafeFloat: Float32 = Float32(Int.min / 1000)
-    
+
+    // 6x1344 dimensional output (6 rows of size 1344)
+    // Output describes bounding box location, dimension and confidence score
+    // Note that bounding box information is relative to resized input image
     for i in (0..<1344) {
-        let conf = outputData[i + 1344 * 5] // This is always safe
-        
-        // Only process high-confidence detections
-        guard conf > detectionConfidenceThreshold else { continue }
-        
-        // Get raw float values
-        let xmFloat = outputData[i]
-        let ymFloat = outputData[i + 1344]
-        let wFloat = outputData[i + 1344 * 2]
-        let hFloat = outputData[i + 1344 * 3]
-        
-        // Only check for finite values and extreme cases that would crash Int conversion
-        guard xmFloat.isFinite && ymFloat.isFinite && wFloat.isFinite && hFloat.isFinite else {
-            print("Skipping detection with non-finite values")
-            continue
+        // Keep as Float32 to avoid overflow, then convert safely
+        let xm_float = outputData[i]  // 0th row is x-middle
+        let ym_float = outputData[i + 1344] // 1st row is y-middle
+        let w_float = outputData[i + 1344 * 2] // width
+        let h_float = outputData[i + 1344 * 3]   // height
+        let conf = outputData[i + 1344 * 5] // confidence of detection
+
+        // Only keep detections with high confidence scores
+        if conf > detectionConfidenceThreshold {
+            // Safely convert to CGFloat for CGRect (which can handle larger values)
+            let xm = CGFloat(xm_float)
+            let ym = CGFloat(ym_float)
+            let w = CGFloat(w_float)
+            let h = CGFloat(h_float)
+            
+            // Assign ID so we can map embeddings -> Bounding Boxes
+            let bounding_box = BoundingBox(
+                rect: CGRect(x: xm, y: ym, width: w, height: h), 
+                conf: conf, 
+                id: detections.count + 1
+            )
+            detections.append(bounding_box)
         }
-        
-        // Only filter out values that would definitely crash the Int conversion
-        guard xmFloat >= minSafeFloat && xmFloat <= maxSafeFloat &&
-              ymFloat >= minSafeFloat && ymFloat <= maxSafeFloat &&
-              wFloat >= minSafeFloat && wFloat <= maxSafeFloat &&
-              hFloat >= minSafeFloat && hFloat <= maxSafeFloat else {
-            print("Skipping detection with values too large for Int conversion: x=\(xmFloat), y=\(ymFloat), w=\(wFloat), h=\(hFloat)")
-            continue
-        }
-        
-        // Now safe to convert to Int
-        let xm = Int(xmFloat)
-        let ym = Int(ymFloat)
-        let w = Int(wFloat)
-        let h = Int(hFloat)
-        
-        // Allow negative coordinates (partially visible objects) and large dimensions
-        // Only filter out clearly invalid boxes (zero or negative dimensions)
-        guard w > 0 && h > 0 else {
-            print("Skipping detection with invalid dimensions: w=\(w), h=\(h)")
-            continue
-        }
-        
-        let bounding_box = BoundingBox(rect: CGRect(x: xm, y: ym, width: w, height: h), conf: conf, id: detections.count + 1)
-        detections.append(bounding_box)
     }
-    
-    print("Parsed \(detections.count) valid detections")
+
     return detections
 }
