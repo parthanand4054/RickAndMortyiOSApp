@@ -1,50 +1,154 @@
-import SwiftUI
-import UniformTypeIdentifiers
-
-struct TestView: View {
-    let fn = "log.zip"
+func localize(pixelBuffer: CVPixelBuffer) {
+    guard let image = CGImage.create(from: pixelBuffer) else { return }
+    let uiImage = UIImage(cgImage: image)
     
-    var body: some View {
-        VStack {
-            Text("test")
-                .font(.title)
-                .padding()
-            
-            Button(action: {
-                testfn()
-            }) {
-                HStack {
-                    Text("test \(fn)")
+    // Run object detection to get new bounding box predictions
+    let predictions = self.inferenceVM.localize(uiImage: uiImage)
+    
+    // Switching to the main thread
+    DispatchQueue.main.async {
+        var newPredictions = predictions ?? []
+        
+        // Detect significant motion
+        let motionDetected = self.detectSignificantMotion(newBoxes: newPredictions)
+        
+        if motionDetected {
+            // Clear all product IDs on significant motion
+            for i in 0..<newPredictions.count {
+                newPredictions[i].prodID = nil
+            }
+            print("Motion detected - clearing all product IDs")
+        } else {
+            // Only apply sticky labels if no significant motion
+            if let oldBoxes = self.boundingBoxes {
+                for i in 0..<newPredictions.count {
+                    let newBox = newPredictions[i]
+                    let newCenter = CGPoint(x: newBox.rect.midX, y: newBox.rect.midY)
+                    
+                    // Find the closest old box
+                    var closestOldBox: BoundingBox?
+                    var minDistance: CGFloat = CGFloat.greatestFiniteMagnitude
+                    
+                    for oldBox in oldBoxes {
+                        let oldCenter = CGPoint(x: oldBox.rect.midX, y: oldBox.rect.midY)
+                        let distance = hypot(newCenter.x - oldCenter.x, newCenter.y - oldCenter.y)
+                        
+                        if distance < minDistance {
+                            minDistance = distance
+                            closestOldBox = oldBox
+                        }
+                    }
+                    
+                    // Only transfer product ID if:
+                    // 1. Distance is within threshold
+                    // 2. The old box had a product ID
+                    // REMOVED: Size similarity check
+                    if let oldBox = closestOldBox,
+                       minDistance < 20,
+                       let prodID = oldBox.prodID {
+                        newPredictions[i].prodID = prodID
+                    }
                 }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
             }
         }
-    }
-    
-    func testfn() {
-        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
-                                              withExtension: "zip") else {
-            print("error")
-            return
-        }
         
-        let activityViewController = UIActivityViewController(
-            activityItems: [fur],
-            applicationActivities: nil
-        )
+        self.frame = image
+        self.boundingBoxes = newPredictions
+        self.frameCounter += 1
         
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityViewController, animated: true, completion: nil)
+        // Run embedding matching more frequently after motion or every nth frame
+        if motionDetected || self.frameCounter % self.matchingFrameInterval == 0 {
+            self.runMatchingOnBoundingBoxes(for: image)
         }
     }
 }
 
-struct ContentView: View {
-    var body: some View {
-        TestView()
+
+
+
+
+
+
+
+
+
+
+// Detect significant camera motion based on box positions
+private func detectSignificantMotion(newBoxes: [BoundingBox]) -> Bool {
+    let currentPositions = newBoxes.map { CGPoint(x: $0.rect.midX, y: $0.rect.midY) }
+    
+    // If we don't have previous positions, store current and return false
+    guard !lastBoxPositions.isEmpty else {
+        lastBoxPositions = currentPositions
+        return false
+    }
+    
+    // Calculate average displacement
+    var totalDisplacement: CGFloat = 0
+    let comparableCount = min(currentPositions.count, lastBoxPositions.count)
+    
+    if comparableCount > 0 {
+        for i in 0..<comparableCount {
+            let displacement = hypot(
+                currentPositions[i].x - lastBoxPositions[i].x,
+                currentPositions[i].y - lastBoxPositions[i].y
+            )
+            totalDisplacement += displacement
+        }
+        
+        let averageDisplacement = totalDisplacement / CGFloat(comparableCount)
+        let normalizedDisplacement = averageDisplacement / modelDimensions.width
+        
+        // Store current positions for next frame
+        lastBoxPositions = currentPositions
+        
+        // If average displacement exceeds threshold, motion detected
+        if normalizedDisplacement > significantMotionThreshold {
+            return true
+        }
+    }
+    
+    // Also check if number of boxes changed significantly
+    let countDifference = abs(currentPositions.count - lastBoxPositions.count)
+    if countDifference > 3 {
+        lastBoxPositions = currentPositions
+        return true
+    }
+    
+    return false
+}
+
+
+
+
+
+
+
+
+
+func runMatchingOnBoundingBoxes(for frame: CGImage) {
+    guard let boxes = self.boundingBoxes, !boxes.isEmpty else { return }
+    var updatedBoxes = boxes
+    let group = DispatchGroup()
+    let lock = DispatchQueue(label: "org.walmart.boundingBoxLock")
+    
+    for index in boxes.indices {
+        // Only match boxes that don't have a product ID yet
+        if updatedBoxes[index].prodID == nil {
+            group.enter()
+            DispatchQueue.global().async {
+                let matchedProductID = self.inferenceVM.match(detection: boxes[index], from: frame)
+                if let match = matchedProductID {
+                    lock.sync {
+                        updatedBoxes[index].prodID = match
+                    }
+                }
+                group.leave()
+            }
+        }
+    }
+    
+    group.notify(queue: DispatchQueue.main) {
+        self.boundingBoxes = updatedBoxes
     }
 }
