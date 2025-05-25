@@ -8,13 +8,13 @@ private func parseDetectionModelOutput(from outputTensor: Tensor) -> [BoundingBo
     
     var detections: [BoundingBox] = []
     
-    // Define reasonable bounds for coordinates (based on typical image sizes)
-    let maxCoordinate: Float32 = 2000.0  // Reasonable upper bound
-    let minCoordinate: Float32 = -100.0  // Allow some negative values
-    let maxDimension: Float32 = 1000.0   // Maximum width/height
+    // More lenient bounds - based on your model's expected input size (256x256)
+    // Allow coordinates to be outside image bounds for partially visible objects
+    let maxSafeFloat: Float32 = Float32(Int.max / 1000) // Much safer conversion limit
+    let minSafeFloat: Float32 = Float32(Int.min / 1000)
     
     for i in (0..<1344) {
-        let conf = outputData[i + 1344 * 5]
+        let conf = outputData[i + 1344 * 5] // This is always safe
         
         // Only process high-confidence detections
         guard conf > detectionConfidenceThreshold else { continue }
@@ -25,18 +25,18 @@ private func parseDetectionModelOutput(from outputTensor: Tensor) -> [BoundingBo
         let wFloat = outputData[i + 1344 * 2]
         let hFloat = outputData[i + 1344 * 3]
         
-        // Check if values are reasonable before conversion
+        // Only check for finite values and extreme cases that would crash Int conversion
         guard xmFloat.isFinite && ymFloat.isFinite && wFloat.isFinite && hFloat.isFinite else {
             print("Skipping detection with non-finite values")
             continue
         }
         
-        // Check if values are within reasonable bounds
-        guard xmFloat >= minCoordinate && xmFloat <= maxCoordinate &&
-              ymFloat >= minCoordinate && ymFloat <= maxCoordinate &&
-              wFloat > 0 && wFloat <= maxDimension &&
-              hFloat > 0 && hFloat <= maxDimension else {
-            print("Skipping detection with unreasonable values: x=\(xmFloat), y=\(ymFloat), w=\(wFloat), h=\(hFloat)")
+        // Only filter out values that would definitely crash the Int conversion
+        guard xmFloat >= minSafeFloat && xmFloat <= maxSafeFloat &&
+              ymFloat >= minSafeFloat && ymFloat <= maxSafeFloat &&
+              wFloat >= minSafeFloat && wFloat <= maxSafeFloat &&
+              hFloat >= minSafeFloat && hFloat <= maxSafeFloat else {
+            print("Skipping detection with values too large for Int conversion: x=\(xmFloat), y=\(ymFloat), w=\(wFloat), h=\(hFloat)")
             continue
         }
         
@@ -46,10 +46,17 @@ private func parseDetectionModelOutput(from outputTensor: Tensor) -> [BoundingBo
         let w = Int(wFloat)
         let h = Int(hFloat)
         
+        // Allow negative coordinates (partially visible objects) and large dimensions
+        // Only filter out clearly invalid boxes (zero or negative dimensions)
+        guard w > 0 && h > 0 else {
+            print("Skipping detection with invalid dimensions: w=\(w), h=\(h)")
+            continue
+        }
+        
         let bounding_box = BoundingBox(rect: CGRect(x: xm, y: ym, width: w, height: h), conf: conf, id: detections.count + 1)
         detections.append(bounding_box)
     }
     
-    print("Parsed \(detections.count) valid detections out of potential high-confidence detections")
+    print("Parsed \(detections.count) valid detections")
     return detections
 }
