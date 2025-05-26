@@ -2,44 +2,43 @@ func localize(pixelBuffer: CVPixelBuffer) {
     guard let image = CGImage.create(from: pixelBuffer) else { return }
     let uiImage = UIImage(cgImage: image)
     
-    // Run object detection to get new bounding box predictions.
     let predictions = self.inferenceVM.localize(uiImage: uiImage)
     
-    // Switching to the main thread
     DispatchQueue.main.async {
-        // Create a mutable copy of new predictions.
         var newPredictions = predictions ?? []
         
-        // ONLY use sticky labels when NOT searching for a specific product
-        if self.searchProductID.isEmpty {
-            // Original sticky label logic - only when browsing without search
-            if let oldBoxes = self.boundingBoxes {
-                for i in 0..<newPredictions.count {
-                    let newBox = newPredictions[i]
-                    let newCenter = CGPoint(x: newBox.rect.midX, y: newBox.rect.midY)
-                    for oldBox in oldBoxes {
-                        let oldCenter = CGPoint(x: oldBox.rect.midX, y: oldBox.rect.midY)
-                        let distance = hypot(newCenter.x - oldCenter.x, newCenter.y - oldCenter.y)
-                        if distance < 20 {
-                            newPredictions[i].prodID = oldBox.prodID
-                            break
+        // Merge cached labels from previous bounding boxes
+        if let oldBoxes = self.boundingBoxes {
+            for i in 0..<newPredictions.count {
+                let newBox = newPredictions[i]
+                let newCenter = CGPoint(x: newBox.rect.midX, y: newBox.rect.midY)
+                
+                for oldBox in oldBoxes {
+                    let oldCenter = CGPoint(x: oldBox.rect.midX, y: oldBox.rect.midY)
+                    let distance = hypot(newCenter.x - oldCenter.x, newCenter.y - oldCenter.y)
+                    
+                    if distance < 20 && oldBox.prodID != nil {
+                        // VERIFY: Only transfer if this new box is likely the same product
+                        // Run a quick embedding match just for this box
+                        if let cgImage = image {
+                            let matchedID = self.inferenceVM.match(detection: newBox, from: cgImage)
+                            if matchedID == oldBox.prodID {
+                                // Confirmed same product - safe to transfer
+                                newPredictions[i].prodID = oldBox.prodID
+                            }
                         }
+                        break
                     }
                 }
             }
         }
-        // When searching, rely entirely on embedding matching - no sticky labels!
         
         self.frame = image
         self.boundingBoxes = newPredictions
         self.frameCounter += 1
         
-        // When searching, run matching more frequently to compensate for no sticky labels
-        let matchingInterval = self.searchProductID.isEmpty ? 
-            self.matchingFrameInterval : 
-            max(5, self.matchingFrameInterval / 4)  // 4x more frequent when searching
-        
-        if self.frameCounter % matchingInterval == 0 {
+        // Still run periodic matching for unidentified boxes
+        if self.frameCounter % self.matchingFrameInterval == 0 {
             self.runMatchingOnBoundingBoxes(for: image)
         }
     }
