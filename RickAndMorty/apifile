@@ -1,45 +1,43 @@
-func localize(pixelBuffer: CVPixelBuffer) {
-    guard let image = CGImage.create(from: pixelBuffer) else { return }
-    let uiImage = UIImage(cgImage: image)
-    
-    let predictions = self.inferenceVM.localize(uiImage: uiImage)
-    
-    DispatchQueue.main.async {
-        var newPredictions = predictions ?? []
-        
-        // Merge cached labels from previous bounding boxes
-        if let oldBoxes = self.boundingBoxes {
-            for i in 0..<newPredictions.count {
-                let newBox = newPredictions[i]
-                let newCenter = CGPoint(x: newBox.rect.midX, y: newBox.rect.midY)
-                
-                for oldBox in oldBoxes {
-                    let oldCenter = CGPoint(x: oldBox.rect.midX, y: oldBox.rect.midY)
-                    let distance = hypot(newCenter.x - oldCenter.x, newCenter.y - oldCenter.y)
-                    
-                    if distance < 20 && oldBox.prodID != nil {
-                        // VERIFY: Only transfer if this new box is likely the same product
-                        // Run a quick embedding match just for this box
-                        if let cgImage = image {
-                            let matchedID = self.inferenceVM.match(detection: newBox, from: cgImage)
-                            if matchedID == oldBox.prodID {
-                                // Confirmed same product - safe to transfer
-                                newPredictions[i].prodID = oldBox.prodID
-                            }
-                        }
-                        break
-                    }
-                }
-            }
-        }
-        
-        self.frame = image
-        self.boundingBoxes = newPredictions
-        self.frameCounter += 1
-        
-        // Still run periodic matching for unidentified boxes
-        if self.frameCounter % self.matchingFrameInterval == 0 {
-            self.runMatchingOnBoundingBoxes(for: image)
-        }
+import CoreGraphics
+
+extension CGRect {
+    /// Returns Intersection-over-Union (0…1) with another rect *in the same coordinate space*.
+    func iou(with other: CGRect) -> CGFloat {
+        let intersection = self.intersection(other)
+        guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { return 0 }
+
+        let interArea = intersection.width * intersection.height
+        let unionArea  = self.width * self.height + other.width * other.height - interArea
+        return interArea / unionArea
     }
 }
+
+
+
+
+for i in 0..<newPredictions.count {
+    let newBox = newPredictions[i]
+
+    // Find the *single* previous box that overlaps most with this one
+    // (optional; you can also just break on first IoU > 0.5)
+    var bestMatch: BoundingBox? = nil
+    var bestIoU: CGFloat = 0
+
+    if let oldBoxes = oldBoxes {
+        for oldBox in oldBoxes {
+            let iou = newBox.rect.iou(with: oldBox.rect)
+            if iou > bestIoU {
+                bestIoU = iou
+                bestMatch = oldBox
+            }
+        }
+    }
+
+    // Reuse label only if the areas overlap enough
+    if bestIoU > 0.5, let match = bestMatch {
+        newPredictions[i].prodID = match.prodID
+    }
+}
+
+
+
