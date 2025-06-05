@@ -1,29 +1,25 @@
-import Foundation
-
-/// Deletes the Core ML delegate’s compiled-model cache that TensorFlow Lite
-/// leaves in Library/Caches/org.tensorflow.lite.coreml.
-enum CoreMLCacheCleaner {
-
-    /// Call once at launch. Runs on a background queue so it never blocks UI.
-    static func clean() {
-        DispatchQueue.global(qos: .utility).async {
-            let fm = FileManager.default
-
-            guard let cachesURL = fm.urls(for: .cachesDirectory,
-                                          in: .userDomainMask).first else { return }
-
-            let coreMLCacheURL = cachesURL.appendingPathComponent("org.tensorflow.lite.coreml",
-                                                                  isDirectory: true)
-
-            guard
-                fm.fileExists(atPath: coreMLCacheURL.path),
-                let contents = try? fm.contentsOfDirectory(at: coreMLCacheURL,
-                                                           includingPropertiesForKeys: nil)
-            else { return }
-
-            for url in contents {
-                try? fm.removeItem(at: url)        // swallow errors; safest for production
-            }
-        }
+// In ProductSearchViewModel.swift
+func search(query: String) {
+    guard !query.isEmpty else { return }
+    
+    // Temporary workaround while OAuth is broken
+    let mockProducts = [
+        Product(upcNumber: "025000031250", 
+               productName: "Kellogg's Froot Loops Cereal", 
+               productShortDescription: "Colorful fruit-flavored cereal", 
+               imageUrl: "https://example.com/frootloops.jpg"),
+        Product(upcNumber: "038000844522", 
+               productName: "Cheerios Original Cereal", 
+               productShortDescription: "Heart-healthy whole grain oats", 
+               imageUrl: "https://example.com/cheerios.jpg")
+    ]
+    
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { // Simulate network delay
+        self.searchResults = mockProducts.filter { $0.productName.lowercased().contains(query.lowercased()) }
+        self.isSearching = false
     }
+    return
+    
+    // Comment out the real API call for now
+    // service.searchItems(query: query)...
 }
