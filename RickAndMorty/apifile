@@ -1,52 +1,29 @@
-// ---------------------------------------------------------------------
-//  ADD THIS *BELOW* THE LAST BRACE OF ProductEmbedder
-// ---------------------------------------------------------------------
+import Foundation
 
-// MARK: - Singleton wrapper (≈ 60 lines)
-// Keeps ONE ProductEmbedder alive for the whole app lifecycle.
-final class ProductEmbedderManager {
+/// Deletes the Core ML delegate’s compiled-model cache that TensorFlow Lite
+/// leaves in Library/Caches/org.tensorflow.lite.coreml.
+enum CoreMLCacheCleaner {
 
-    static let shared = ProductEmbedderManager()
-    private init() {}
+    /// Call once at launch. Runs on a background queue so it never blocks UI.
+    static func clean() {
+        DispatchQueue.global(qos: .utility).async {
+            let fm = FileManager.default
 
-    private var productEmbedder: ProductEmbedder?
-    private var isInitialized  = false
-    private let lock           = NSLock()
+            guard let cachesURL = fm.urls(for: .cachesDirectory,
+                                          in: .userDomainMask).first else { return }
 
-    /// Compile the YOLO-v8 + MobileViT interpreters exactly once.
-    /// Call at launch or lazily before first inference.
-    func ensureInitialized(completion: @escaping (Bool) -> Void) {
-        lock.lock()
-        if isInitialized { lock.unlock(); completion(true); return }
-        lock.unlock()
+            let coreMLCacheURL = cachesURL.appendingPathComponent("org.tensorflow.lite.coreml",
+                                                                  isDirectory: true)
 
-        // ---- adapt the two FileInfo constants below if you renamed files ----
-        let yoloInfo   : FileInfo = ("YOLOV8",   "tflite")
-        let mobileVitInfo: FileInfo = ("mobilevit","tflite")
+            guard
+                fm.fileExists(atPath: coreMLCacheURL.path),
+                let contents = try? fm.contentsOfDirectory(at: coreMLCacheURL,
+                                                           includingPropertiesForKeys: nil)
+            else { return }
 
-        ProductEmbedder.newCoreMLEmbedder(
-            localizerModelFileInfo: yoloInfo,
-            embedderModelFileInfo: mobileVitInfo
-        ) { result in
-            switch result {
-            case .success(let embedder):
-                self.productEmbedder = embedder
-                self.isInitialized   = true
-                completion(true)
-            case .error(let err):
-                print("❌ Interpreter init failed: \(err)")
-                completion(false)
+            for url in contents {
+                try? fm.removeItem(at: url)        // swallow errors; safest for production
             }
         }
-    }
-
-    // Thin pass-through helpers so the rest of the code doesn’t change.
-    func localize(uiImage: UIImage) -> [BoundingBox]? {
-        productEmbedder?.localize(uiImage: uiImage)
-    }
-
-    func embed(detection: BoundingBox, from cgImage: CGImage) -> [Float]? {
-        productEmbedder?.embed(detection: detection,
-                               from: UIImage(cgImage: cgImage))
     }
 }
