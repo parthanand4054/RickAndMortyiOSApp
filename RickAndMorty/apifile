@@ -1,149 +1,31 @@
-static func newInstance(localizerModelFileInfo: FileInfo,
-                        embedderModelFileInfo: FileInfo,
-                        useCoreML: Bool, completion: @escaping ((Result<ProductEmbedder>) -> Void)) {
-    let tfLiteQueue = DispatchQueue(label: "compass.vision.product_recognition")
-    let localizerModel = localizerModelFileInfo.name
-    let embedderModel = embedderModelFileInfo.name
+@main
+struct ShelfScanDemoApp: App {
+    @StateObject private var inferenceViewModel = InferenceViewModel()
+    @StateObject var tokenViewModel = TokenViewModel(networkService: NetworkService(keychainService: KeychainService.standard))
 
-    // Your original debug prints
-    let localizerModelPath1 = Bundle.main.path(
-          forResource: localizerModelFileInfo.name,
-          ofType: localizerModelFileInfo.extension
-        )
-    let embedderModelPath1 = Bundle.main.path(
-          forResource: embedderModelFileInfo.name,
-          ofType: embedderModelFileInfo.extension
-        )
-    print(localizerModelPath1)
-    print(embedderModelPath1)
-
-    // Construct the path to the model file.
-    tfLiteQueue.async {
-        // Create consistent cache directory
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let modelCacheDir = cacheDir.appendingPathComponent("models")
+    var body: some Scene {
+        WindowGroup {
+            HomePageView(inferenceViewModel: inferenceViewModel)
+                .environmentObject(tokenViewModel)
+                .onAppear {
+                    tokenViewModel.fetchToken()
+                    // Clear cache on app start
+                    clearCoreMLCacheOnStart()
+                }
+        }
+    }
+    
+    private func clearCoreMLCacheOnStart() {
+        let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let coreMLCacheURL = cacheURL.appendingPathComponent("org.tensorflow.lite.coreml")
         
         do {
-            // Create directory if it doesn't exist
-            try FileManager.default.createDirectory(at: modelCacheDir, withIntermediateDirectories: true, attributes: nil)
+            if FileManager.default.fileExists(atPath: coreMLCacheURL.path) {
+                try FileManager.default.removeItem(at: coreMLCacheURL)
+                print("🗑️ Cleared Core ML cache on app start")
+            }
         } catch {
-            print("Failed to create model cache directory: \(error)")
-        }
-        
-        // Define consistent cache paths
-        let localizerCachePath = modelCacheDir.appendingPathComponent("localizer.tflite").path
-        let embedderCachePath = modelCacheDir.appendingPathComponent("embedder.tflite").path
-        
-        // Copy models to cache with consistent paths if they don't exist
-        if !FileManager.default.fileExists(atPath: localizerCachePath) {
-            guard let originalLocalizerPath = Bundle.main.path(
-                forResource: localizerModelFileInfo.name,
-                ofType: localizerModelFileInfo.extension
-            ) else {
-                DispatchQueue.main.async {
-                    completion(.error(InitializationError.invalidModel(
-                        "Localizer model \(localizerModel) could not be found in bundle."
-                    )))
-                }
-                return
-            }
-            
-            do {
-                try FileManager.default.copyItem(atPath: originalLocalizerPath, toPath: localizerCachePath)
-                print("📁 Copied localizer model to cache: \(localizerCachePath)")
-            } catch {
-                print("Failed to copy localizer model: \(error)")
-                DispatchQueue.main.async {
-                    completion(.error(InitializationError.invalidModel(
-                        "Failed to copy localizer model: \(error.localizedDescription)"
-                    )))
-                }
-                return
-            }
-        }
-        
-        if !FileManager.default.fileExists(atPath: embedderCachePath) {
-            guard let originalEmbedderPath = Bundle.main.path(
-                forResource: embedderModelFileInfo.name,
-                ofType: embedderModelFileInfo.extension
-            ) else {
-                DispatchQueue.main.async {
-                    completion(.error(InitializationError.invalidModel(
-                        "Embedder model \(embedderModel) could not be found in bundle."
-                    )))
-                }
-                return
-            }
-            
-            do {
-                try FileManager.default.copyItem(atPath: originalEmbedderPath, toPath: embedderCachePath)
-                print("📁 Copied embedder model to cache: \(embedderCachePath)")
-            } catch {
-                print("Failed to copy embedder model: \(error)")
-                DispatchQueue.main.async {
-                    completion(.error(InitializationError.invalidModel(
-                        "Failed to copy embedder model: \(error.localizedDescription)"
-                    )))
-                }
-                return
-            }
-        }
-        
-        // Use the consistent cache paths for model loading (replaces your original guard statement)
-        let localizerModelPath = localizerCachePath
-        let embedderModelPath = embedderCachePath
-        
-        print("🔍 Using localizer model from: \(localizerModelPath)")
-        print("🔍 Using embedder model from: \(embedderModelPath)")
-
-        let createDelegates: () -> [Delegate]? = {
-            var delegate: Delegate?
-            if useCoreML {
-                delegate = CoreMLDelegate()
-            } else if delegate == nil {
-                // Fall back on metal delegate
-                delegate = MetalDelegate()
-            }
-
-            return [delegate!]
-        }
-
-        do {
-            let localizer = try Interpreter(
-                modelPath: localizerModelPath,
-                delegates: createDelegates()
-            )
-
-            let embedder = try Interpreter(modelPath: embedderModelPath)
-
-            // Allocate tensors
-            try localizer.allocateTensors()
-            try embedder.allocateTensors()
-
-            let localizerInputHeight = try localizer.input(at: 0).shape.dimensions[1]
-            let localizerInputWidth = try localizer.input(at: 0).shape.dimensions[2]
-
-            let embedderInputHeight = try embedder.input(at: 0).shape.dimensions[2]
-            let embedderInputWidth = try embedder.input(at: 0).shape.dimensions[3]
-
-            let productEmbedder = ProductEmbedder(tfLiteQueue: tfLiteQueue,
-                                                  localizerInterpreter: localizer,
-                                                  embedInterpreter: embedder,
-                                                  localizerInputHeight,
-                                                  localizerInputWidth,
-                                                  embedderInputHeight,
-                                                  embedderInputWidth)
-            DispatchQueue.main.async {
-                print("✅ Product embedder initialized with consistent model paths.")
-                completion(.success(productEmbedder))
-            }
-            
-        } catch let error {
-            print("Failed to create the interpreter with error: \(error.localizedDescription)")
-            DispatchQueue.main.async {
-                completion(.error(InitializationError.internalError(error)))
-            }
-            return
+            print("❌ Failed to clear cache: \(error)")
         }
     }
 }
