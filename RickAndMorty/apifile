@@ -1,31 +1,58 @@
+import Foundation
+
 @main
 struct ShelfScanDemoApp: App {
-    @StateObject private var inferenceViewModel = InferenceViewModel()
-    @StateObject var tokenViewModel = TokenViewModel(networkService: NetworkService(keychainService: KeychainService.standard))
+    init() {
+        // 1. Find the Caches directory.
+        guard let cachesURL = FileManager.default
+                .urls(for: .cachesDirectory, in: .userDomainMask)
+                .first else {
+            print("❌ No Caches directory found.")
+            return
+        }
+        print("📂 Caches folder: \(cachesURL.path)")
+        
+        // 2. Look for the 'com.apple.coreml' subfolder.
+        let coreMLCacheURL = cachesURL.appendingPathComponent("com.apple.coreml")
+        if FileManager.default.fileExists(atPath: coreMLCacheURL.path) {
+            print("📂 Found CoreML cache at: \(coreMLCacheURL.path)")
+            
+            // 3. Enumerate everything inside 'com.apple.coreml' and print names + sizes.
+            do {
+                let items = try FileManager.default.contentsOfDirectory(
+                    at: coreMLCacheURL,
+                    includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+                    options: [.skipsHiddenFiles]
+                )
+                
+                for item in items {
+                    let attrs = try item.resourceValues(
+                        forKeys: [.fileSizeKey, .contentModificationDateKey]
+                    )
+                    let size = attrs.fileSize.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) }
+                              ?? "–"
+                    let date = attrs.contentModificationDate.map { "\($0)" } ?? "–"
+                    print("   • \(item.lastPathComponent)  (\(size!), modified: \(date))")
+                }
+            } catch {
+                print("⚠️ Couldn’t list contents of \(coreMLCacheURL.path): \(error)")
+            }
+        } else {
+            print("ℹ️ No CoreML cache folder exists yet.")
+        }
+        
+        // 4. (Optional) Also print any TFLite‐related temp folders, if used:
+        let tfliteTempURL = cachesURL.appendingPathComponent("tflite")
+        if FileManager.default.fileExists(atPath: tfliteTempURL.path) {
+            print("📂 Found TFLite temp at: \(tfliteTempURL.path)")
+            // …you could list its contents just like above
+        }
+    }
 
+    var inferenceViewModel: InferenceViewModel = InferenceViewModel()
     var body: some Scene {
         WindowGroup {
             HomePageView(inferenceViewModel: inferenceViewModel)
-                .environmentObject(tokenViewModel)
-                .onAppear {
-                    tokenViewModel.fetchToken()
-                    // Clear cache on app start
-                    clearCoreMLCacheOnStart()
-                }
-        }
-    }
-    
-    private func clearCoreMLCacheOnStart() {
-        let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        let coreMLCacheURL = cacheURL.appendingPathComponent("org.tensorflow.lite.coreml")
-        
-        do {
-            if FileManager.default.fileExists(atPath: coreMLCacheURL.path) {
-                try FileManager.default.removeItem(at: coreMLCacheURL)
-                print("🗑️ Cleared Core ML cache on app start")
-            }
-        } catch {
-            print("❌ Failed to clear cache: \(error)")
         }
     }
 }
