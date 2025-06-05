@@ -1,43 +1,52 @@
-import CoreGraphics
+// ---------------------------------------------------------------------
+//  ADD THIS *BELOW* THE LAST BRACE OF ProductEmbedder
+// ---------------------------------------------------------------------
 
-extension CGRect {
-    /// Returns Intersection-over-Union (0…1) with another rect *in the same coordinate space*.
-    func iou(with other: CGRect) -> CGFloat {
-        let intersection = self.intersection(other)
-        guard !intersection.isNull, intersection.width > 0, intersection.height > 0 else { return 0 }
+// MARK: - Singleton wrapper (≈ 60 lines)
+// Keeps ONE ProductEmbedder alive for the whole app lifecycle.
+final class ProductEmbedderManager {
 
-        let interArea = intersection.width * intersection.height
-        let unionArea  = self.width * self.height + other.width * other.height - interArea
-        return interArea / unionArea
-    }
-}
+    static let shared = ProductEmbedderManager()
+    private init() {}
 
+    private var productEmbedder: ProductEmbedder?
+    private var isInitialized  = false
+    private let lock           = NSLock()
 
+    /// Compile the YOLO-v8 + MobileViT interpreters exactly once.
+    /// Call at launch or lazily before first inference.
+    func ensureInitialized(completion: @escaping (Bool) -> Void) {
+        lock.lock()
+        if isInitialized { lock.unlock(); completion(true); return }
+        lock.unlock()
 
+        // ---- adapt the two FileInfo constants below if you renamed files ----
+        let yoloInfo   : FileInfo = ("YOLOV8",   "tflite")
+        let mobileVitInfo: FileInfo = ("mobilevit","tflite")
 
-for i in 0..<newPredictions.count {
-    let newBox = newPredictions[i]
-
-    // Find the *single* previous box that overlaps most with this one
-    // (optional; you can also just break on first IoU > 0.5)
-    var bestMatch: BoundingBox? = nil
-    var bestIoU: CGFloat = 0
-
-    if let oldBoxes = oldBoxes {
-        for oldBox in oldBoxes {
-            let iou = newBox.rect.iou(with: oldBox.rect)
-            if iou > bestIoU {
-                bestIoU = iou
-                bestMatch = oldBox
+        ProductEmbedder.newCoreMLEmbedder(
+            localizerModelFileInfo: yoloInfo,
+            embedderModelFileInfo: mobileVitInfo
+        ) { result in
+            switch result {
+            case .success(let embedder):
+                self.productEmbedder = embedder
+                self.isInitialized   = true
+                completion(true)
+            case .error(let err):
+                print("❌ Interpreter init failed: \(err)")
+                completion(false)
             }
         }
     }
 
-    // Reuse label only if the areas overlap enough
-    if bestIoU > 0.5, let match = bestMatch {
-        newPredictions[i].prodID = match.prodID
+    // Thin pass-through helpers so the rest of the code doesn’t change.
+    func localize(uiImage: UIImage) -> [BoundingBox]? {
+        productEmbedder?.localize(uiImage: uiImage)
+    }
+
+    func embed(detection: BoundingBox, from cgImage: CGImage) -> [Float]? {
+        productEmbedder?.embed(detection: detection,
+                               from: UIImage(cgImage: cgImage))
     }
 }
-
-
-
