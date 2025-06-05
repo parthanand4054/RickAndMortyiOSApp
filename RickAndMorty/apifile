@@ -1,34 +1,50 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-@main
-struct ShelfScanDemoApp: App {
-    init() {
-        // 1) Find the Caches directory in our sandbox.
-        if let cachesURL = FileManager.default.urls(
-            for: .cachesDirectory,
-            in: .userDomainMask
-        ).first {
-            // 2) Point at CoreML’s cache folder:
-            let coreMLCacheURL = cachesURL.appendingPathComponent("com.apple.coreml")
-
-            // 3) If that folder exists, remove it now:
-            if FileManager.default.fileExists(atPath: coreMLCacheURL.path) {
-                do {
-                    try FileManager.default.removeItem(at: coreMLCacheURL)
-                    print("✅ Cleared CoreML cache at \(coreMLCacheURL.path)")
-                } catch {
-                    print("⚠️ Failed to delete CoreML cache: \(error)")
+struct TestView: View {
+    let fn = "log.zip"
+    
+    var body: some View {
+        VStack {
+            Text("test")
+                .font(.title)
+                .padding()
+            
+            Button(action: {
+                testfn()
+            }) {
+                HStack {
+                    Text("test \(fn)")
                 }
+                .padding()
+                .background(Color.blue)
+                .foregroundColor(.white)
+                .cornerRadius(8)
             }
         }
-        // (If you have any other model‐temp folders, delete them here as well.)
     }
-
-    // Your existing code:
-    var inferenceViewModel: InferenceViewModel = InferenceViewModel()
-    var body: some Scene {
-        WindowGroup {
-            HomePageView(inferenceViewModel: inferenceViewModel)
+    
+    func testfn() {
+        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
+                                              withExtension: "zip") else {
+            print("error")
+            return
         }
+        
+        let activityViewController = UIActivityViewController(
+            activityItems: [fur],
+            applicationActivities: nil
+        )
+        
+        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+           let rootViewController = windowScene.windows.first?.rootViewController {
+            rootViewController.present(activityViewController, animated: true, completion: nil)
+        }
+    }
+}
+
+struct ContentView: View {
+    var body: some View {
+        TestView()
     }
 }
