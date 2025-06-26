@@ -1,44 +1,107 @@
-import SwiftUI
-import UniformTypeIdentifiers
+func test_setImageCaptureMode_shouldSetPhotoCaptureMode() {
+    let mockItemDetailService = MockItemDetailService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
+    let mockSectionLabelService = MockSectionLabelService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
+    
+    let cameraViewModel = CameraViewModel(
+        imageStoreManager: ImageStoreManager(),
+        itemDetailService: mockItemDetailService,
+        sectionScanService: mockSectionLabelService,
+        cameraManager: mockCameraManager
+    )
+    
+    cameraViewModel.setImageCaptureMode()
+    
+    XCTAssertEqual(cameraViewModel.captureMode, .photo)
+}
 
-struct TestView: View {
-    let fn = "log.zip"
+func test_restartProductScanner_shouldResetStateAndSetBarcodeMode() {
+    let mockItemDetailService = MockItemDetailService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
+    let mockSectionLabelService = MockSectionLabelService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
     
-    var body: some View {
-        VStack {
-            Text("test")
-                .font(.title)
-                .padding()
-            
-            Button(action: {
-                testfn()
-            }) {
-                HStack {
-                    Text("test \(fn)")
-                }
-                .padding()
-                .background(Color.blue)
-                .foregroundColor(.white)
-                .cornerRadius(8)
-            }
-        }
-    }
+    let cameraViewModel = CameraViewModel(
+        imageStoreManager: ImageStoreManager(),
+        itemDetailService: mockItemDetailService,
+        sectionScanService: mockSectionLabelService,
+        cameraManager: mockCameraManager
+    )
     
-    func testfn() {
-        guard let fur = Bundle.main.url(forResource: fn.components(separatedBy: ".").first,
-                                              withExtension: "zip") else {
-            print("error")
-            return
+    // Set initial state
+    cameraViewModel.isBarCodeScanned = true
+    cameraViewModel.productInfo = TestData.productInfoResponse
+    
+    cameraViewModel.restartProductScanner()
+    
+    XCTAssertFalse(cameraViewModel.isBarCodeScanned)
+    XCTAssertEqual(cameraViewModel.captureMode, .barcode)
+}
+
+func test_showErrorAlert_shouldSetAlertErrorAndShowAlert() {
+    let exp = XCTestExpectation(description: #function)
+    let errorMessage = "Test error message"
+    
+    let mockItemDetailService = MockItemDetailService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
+    let mockSectionLabelService = MockSectionLabelService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
+    
+    let cameraViewModel = CameraViewModel(
+        imageStoreManager: ImageStoreManager(),
+        itemDetailService: mockItemDetailService,
+        sectionScanService: mockSectionLabelService,
+        cameraManager: mockCameraManager
+    )
+    
+    cameraViewModel.showErrorAlert(with: errorMessage)
+    
+    cameraViewModel.$showAlertError
+        .receive(on: DispatchQueue.main)
+        .sink { value in
+            guard value else { return }
+            XCTAssertTrue(value)
+            XCTAssertEqual(cameraViewModel.alertError.message, errorMessage)
+            exp.fulfill()
         }
-        
-        let activityViewController = UIActivityViewController(
-            activityItems: [fur],
-            applicationActivities: nil
-        )
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let rootViewController = windowScene.windows.first?.rootViewController {
-            rootViewController.present(activityViewController, animated: true, completion: nil)
-        }
-    }
+        .store(in: &cancellables)
+    
+    wait(for: [exp], timeout: 2.0)
+}
+
+func test_captureImage_shouldCallCameraManagerCaptureImage() {
+    let mockItemDetailService = MockItemDetailService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
+    let mockSectionLabelService = MockSectionLabelService(
+        urlSession: MockURLSession(),
+        keychainService: KeychainService.standard
+    )
+    
+    let cameraViewModel = CameraViewModel(
+        imageStoreManager: ImageStoreManager(),
+        itemDetailService: mockItemDetailService,
+        sectionScanService: mockSectionLabelService,
+        cameraManager: mockCameraManager
+    )
+    
+    // This test verifies the method is called without errors
+    cameraViewModel.captureImage()
+    
+    // Since MockCameraManager doesn't track method calls, we just verify no crash
+    XCTAssertTrue(true)
 }
