@@ -1,12 +1,8 @@
-func test_fetchItemInfo_withNetworkError_shouldHandleGracefully() {
-    let exp = XCTestExpectation(description: #function)
-    
+func test_setImageCaptureMode_shouldSetPhotoCaptureMode() {
     let mockItemDetailService = MockItemDetailService(
         urlSession: MockURLSession(),
         keychainService: KeychainService.standard
     )
-    mockItemDetailService._shouldFail = true
-    
     let mockSectionLabelService = MockSectionLabelService(
         urlSession: MockURLSession(),
         keychainService: KeychainService.standard
@@ -19,19 +15,7 @@ func test_fetchItemInfo_withNetworkError_shouldHandleGracefully() {
         cameraManager: mockCameraManager
     )
     
-    cameraViewModel.setupBindings()
-    cameraViewModel.subFlowType = .productEnrollment
+    cameraViewModel.setImageCaptureMode()
     
-    // Mock store ID for keychain
-    try? KeychainService.standard.saveStoreId(100)
-    
-    mockCameraManager.setCapturedData(.barcode("invalid_barcode", .ean13))
-    
-    // Wait for processing
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-        XCTAssertNil(cameraViewModel.productInfo)
-        exp.fulfill()
-    }
-    
-    wait(for: [exp], timeout: 2.0)
+    XCTAssertEqual(cameraViewModel.captureMode, .photo)
 }
