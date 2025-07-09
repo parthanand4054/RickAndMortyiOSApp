@@ -1,1 +1,55 @@
 
+// MARK: - Delete Photos BottomSheet Presenter
+struct DeletePhotosBottomSheetPresenter: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
+    let photoCount: Int
+    let onDeleteConfirmed: () -> Void
+    
+    func makeUIViewController(context: Context) -> UIViewController {
+        let viewController = UIViewController()
+        viewController.view.backgroundColor = .clear
+        return viewController
+    }
+    
+    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {
+        if isPresented && uiViewController.presentedViewController == nil {
+            let bottomSheet = DeletePhotosBottomSheet(
+                photoCount: photoCount,
+                onDeleteConfirmed: {
+                    isPresented = false
+                    onDeleteConfirmed()
+                }
+            )
+            
+            // Present the bottomsheet following the pattern in the codebase
+            if let navigationController = uiViewController.navigationController {
+                navigationController.presentBottomSheet(bottomSheet, as: .modal)
+            } else {
+                uiViewController.presentBottomSheet(bottomSheet, as: .modal)
+            }
+            
+            // Add completion handler for when bottomsheet is dismissed
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                if let presented = uiViewController.presentedViewController {
+                    presented.presentationController?.delegate = context.coordinator
+                }
+            }
+        }
+    }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented)
+    }
+    
+    class Coordinator: NSObject, UIAdaptivePresentationControllerDelegate {
+        @Binding var isPresented: Bool
+        
+        init(isPresented: Binding<Bool>) {
+            _isPresented = isPresented
+        }
+        
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            isPresented = false
+        }
+    }
+}
