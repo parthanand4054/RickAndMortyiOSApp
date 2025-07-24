@@ -1,1 +1,96 @@
+struct BottomSheet: View {
+    @Binding var isExpanded: Bool
+    @Binding var isVisible: Bool
+    let screenHeight: CGFloat
+
+    let fullHeight: CGFloat = 800
+    let partialHeight: CGFloat = 150
+
+    var currentOffset: CGFloat {
+        if !isVisible {
+            return screenHeight
+        } else if isExpanded {
+            return screenHeight - fullHeight + 35
+        } else {
+            return screenHeight - partialHeight
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: {
+                    withAnimation(.spring()) {
+                        isExpanded.toggle()
+                    }
+                }) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.up")
+                        .padding(.leading)
+                }
+                
+                Spacer()
+                
+                Text("Review Section")
+                    .font(.headline)
+                    .lineLimit(1)
+                
+                Spacer()
+                
+                Button(action: {
+                    withAnimation(.spring()) {
+                        isVisible = false
+                    }
+                }) {
+                    Image(systemName: "xmark")
+                        .padding(.trailing)
+                }
+            }
+            .padding(.vertical, 12)
+            
+            HStack {
+                Text("Missing (1)")
+                Text("Unknown (2)")
+                Text("incorrect (1)")
+            }
+            .padding(.vertical)
+            
+            Divider()
+            
+            if isExpanded {
+                HStack {
+                    Text("Filter By")
+                        .padding()
+                    Spacer()
+                }
+                ExpandableListView()
+                Divider()
+            }
+            
+            HStack(spacing: 40) {
+                Button {
+                    
+                } label: {
+                    Text("Try Again")
+                }
+                
+                Button {
+                    
+                } label: {
+                    Text("Done")
+                }
+            }
+            .padding(.vertical, 30)
+            
+            Spacer()
+        }
+        .frame(height: fullHeight)
+        .frame(maxWidth: .infinity)
+        .background(Color(.white))
+        .cornerRadius(20)
+        .shadow(radius: 5)
+        .offset(y: currentOffset)
+        .animation(.easeInOut, value: isExpanded)
+        .animation(.easeInOut, value: isVisible)
+    }
+}
 
